@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root { color-scheme: light; }
+
+  html, body, #root { height: 100%; }
+
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+    font-size: 15px;
+  }
+
+  /* Las cifras se alinean en columna y no bailan al refrescarse. */
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* Foco visible siempre: la app se opera con teclado durante turnos largos. */
+  :focus-visible {
+    outline: 2px solid theme('colors.steel');
+    outline-offset: 2px;
+  }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb {
+    background: theme('colors.rule');
+    border: 3px solid theme('colors.paper');
+    border-radius: 6px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: theme('colors.ink-3'); }
+}
+
+@layer components {
+  /* Panel: el contenedor base. Sin sombra por defecto; la separacion la
+     dan las reglas de 1px, como en un tablero de instrumentos. */
+  .panel {
+    @apply bg-panel border border-rule rounded-panel;
+  }
+
+  /* La barra de severidad al borde izquierdo es el unico elemento
+     que carga color saturado. */
+  .sev-edge { @apply border-l-[3px]; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,85 @@
+### Variables (VS Code REST Client / IntelliJ HTTP Client)
+@base = http://localhost:4000/api
+@token = PEGAR_ACCESS_TOKEN
+@refresh = PEGAR_REFRESH_TOKEN
+
+### Salud
+GET {{base}}/health
+
+### Login
+POST {{base}}/auth/login
+Content-Type: application/json
+
+{ "username": "admin", "password": "CAMBIAR" }
+
+### Perfil
+GET {{base}}/auth/me
+Authorization: Bearer {{token}}
+
+### Cambiar contrasena propia
+POST {{base}}/auth/change-password
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "currentPassword": "TemporalActual1!", "newPassword": "NuevaSegura123!" }
+
+### Rotar refresh token
+POST {{base}}/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{refresh}}" }
+
+### Listar roles
+GET {{base}}/roles
+Authorization: Bearer {{token}}
+
+### Listar usuarios con filtros
+GET {{base}}/users?page=1&limit=25&isActive=true&sort=created_at:desc
+Authorization: Bearer {{token}}
+
+### Crear usuario
+POST {{base}}/users
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "username": "janalista",
+  "email": "janalista@empresa.com",
+  "fullName": "Juan Analista",
+  "roleId": 2,
+  "password": "Temporal123!aX",
+  "mustChangePassword": true
+}
+
+### Actualizar usuario
+PUT {{base}}/users/2
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "fullName": "Juan Antonio Analista", "roleId": 2 }
+
+### Desactivar usuario
+PATCH {{base}}/users/2/status
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "isActive": false }
+
+### Desbloquear cuenta
+POST {{base}}/users/2/unlock
+Authorization: Bearer {{token}}
+
+### Restablecer contrasena
+POST {{base}}/users/2/reset-password
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "newPassword": "Restablecida123!", "mustChangePassword": true }
+
+### Auditoria
+GET {{base}}/audit?limit=50&entityType=user
+Authorization: Bearer {{token}}
+
+### Cerrar todas las sesiones
+POST {{base}}/auth/logout-all
+Authorization: Bearer {{token}}
