@@ -41,23 +41,19 @@ module.exports = {
 
   db: {
     server: required('DB_SERVER'),
-    port: num('DB_PORT', 1433),
+    port: num('DB_PORT', 5432),
     database: required('DB_NAME'),
     user: required('DB_USER'),
     password: required('DB_PASSWORD'),
-    encrypt: bool('DB_ENCRYPT', true),
-    trustServerCertificate: bool('DB_TRUST_CERT', true),
   },
 
   // Conexion de solo lectura para el ejecutor de KPIs (Fase 2)
   dbReadOnly: {
     server: process.env.DB_RO_SERVER || null,
-    port: num('DB_RO_PORT', 1433),
+    port: num('DB_RO_PORT', 5432),
     database: process.env.DB_RO_NAME || null,
     user: process.env.DB_RO_USER || null,
     password: process.env.DB_RO_PASSWORD || null,
-    encrypt: bool('DB_ENCRYPT', true),
-    trustServerCertificate: bool('DB_TRUST_CERT', true),
   },
 
   jwt: {

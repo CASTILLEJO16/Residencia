@@ -1,5 +1,5 @@
 'use strict';
-const { sql, query } = require('../config/database');
+const { query } = require('../config/database');
 const { parsePagination, buildMeta, safeSort } = require('../utils/pagination');
 
 const FIELDS = `
@@ -12,10 +12,10 @@ const SORTABLE = ['name', 'created_at', 'updated_at', 'widget_type'];
 
 async function findById(id) {
   const result = await query(
-    `SELECT ${FIELDS} FROM dbo.kpis k
-     LEFT JOIN dbo.users u ON u.id = k.created_by
-     WHERE k.id = @id`,
-    [{ name: 'id', type: sql.Int, value: id }]
+    `SELECT ${FIELDS} FROM kpis k
+     LEFT JOIN users u ON u.id = k.created_by
+     WHERE k.id = $1`,
+    [id]
   );
   return result.recordset[0] || null;
 }
@@ -23,9 +23,9 @@ async function findById(id) {
 /** KPIs activos: los que el monitor debe evaluar. */
 async function findActive() {
   const result = await query(
-    `SELECT ${FIELDS} FROM dbo.kpis k
-     LEFT JOIN dbo.users u ON u.id = k.created_by
-     WHERE k.is_active = 1 ORDER BY k.id`
+    `SELECT ${FIELDS} FROM kpis k
+     LEFT JOIN users u ON u.id = k.created_by
+     WHERE k.is_active = true ORDER BY k.id`
   );
   return result.recordset;
 }
@@ -34,144 +34,106 @@ async function list(params) {
   const { page, limit, offset } = parsePagination(params);
   const { column, direction } = safeSort(params.sort, SORTABLE, 'name');
   const args = [
-    { name: 'search', type: sql.NVarChar(200), value: params.search ? `%${params.search}%` : null },
-    { name: 'widgetType', type: sql.NVarChar(20), value: params.widgetType || null },
-    { name: 'isActive', type: sql.Bit,
-      value: params.isActive === undefined || params.isActive === '' ? null : params.isActive === 'true' },
-    { name: 'offset', type: sql.Int, value: offset },
-    { name: 'limit', type: sql.Int, value: limit },
+    params.search ? `%${params.search}%` : null,
+    params.widgetType || null,
+    params.isActive === undefined || params.isActive === '' ? null : params.isActive === 'true',
+    offset,
+    limit,
   ];
   const where = `
-    WHERE (@search IS NULL OR k.name LIKE @search OR k.description LIKE @search)
-      AND (@widgetType IS NULL OR k.widget_type = @widgetType)
-      AND (@isActive IS NULL OR k.is_active = @isActive)`;
+    WHERE ($1 IS NULL OR k.name LIKE $1 OR k.description LIKE $1)
+      AND ($2 IS NULL OR k.widget_type = $2)
+      AND ($3 IS NULL OR k.is_active = $3)`;
 
   const rows = await query(
-    `SELECT ${FIELDS} FROM dbo.kpis k
-     LEFT JOIN dbo.users u ON u.id = k.created_by
+    `SELECT ${FIELDS} FROM kpis k
+     LEFT JOIN users u ON u.id = k.created_by
      ${where} ORDER BY k.${column} ${direction}
-     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`, args);
+     LIMIT $5 OFFSET $4`, args);
 
   const count = await query(
-    `SELECT COUNT(*) AS total FROM dbo.kpis k ${where}`, args.slice(0, 3));
+    `SELECT COUNT(*) AS total FROM kpis k ${where}`, args.slice(0, 3));
 
   return { data: rows.recordset, meta: buildMeta(count.recordset[0].total, page, limit) };
 }
 
 async function create(data, userId) {
   const result = await query(
-    `INSERT INTO dbo.kpis
+    `INSERT INTO kpis
        (name, description, sql_query, data_source, refresh_interval, max_rows,
         timeout_seconds, widget_type, value_column, label_column, is_active, created_by)
-     OUTPUT INSERTED.id
-     VALUES (@name, @description, @sqlQuery, @dataSource, @refreshInterval, @maxRows,
-             @timeoutSeconds, @widgetType, @valueColumn, @labelColumn, @isActive, @createdBy)`,
-    [
-      { name: 'name', type: sql.NVarChar(100), value: data.name },
-      { name: 'description', type: sql.NVarChar(255), value: data.description ?? null },
-      { name: 'sqlQuery', type: sql.NVarChar(sql.MAX), value: data.sqlQuery },
-      { name: 'dataSource', type: sql.NVarChar(100), value: data.dataSource ?? null },
-      { name: 'refreshInterval', type: sql.Int, value: data.refreshInterval ?? 300 },
-      { name: 'maxRows', type: sql.Int, value: data.maxRows ?? 1000 },
-      { name: 'timeoutSeconds', type: sql.Int, value: data.timeoutSeconds ?? 15 },
-      { name: 'widgetType', type: sql.NVarChar(20), value: data.widgetType },
-      { name: 'valueColumn', type: sql.NVarChar(100), value: data.valueColumn ?? null },
-      { name: 'labelColumn', type: sql.NVarChar(100), value: data.labelColumn ?? null },
-      { name: 'isActive', type: sql.Bit, value: data.isActive ?? true },
-      { name: 'createdBy', type: sql.Int, value: userId },
-    ]
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     RETURNING id`,
+    [data.name, data.description ?? null, data.sqlQuery, data.dataSource ?? null, data.refreshInterval ?? 300, data.maxRows ?? 1000, data.timeoutSeconds ?? 15, data.widgetType, data.valueColumn ?? null, data.labelColumn ?? null, data.isActive ?? true, userId]
   );
   return findById(result.recordset[0].id);
 }
 
 async function update(id, data) {
   await query(
-    `UPDATE dbo.kpis SET
-       name             = COALESCE(@name, name),
-       description      = COALESCE(@description, description),
-       sql_query        = COALESCE(@sqlQuery, sql_query),
-       data_source      = COALESCE(@dataSource, data_source),
-       refresh_interval = COALESCE(@refreshInterval, refresh_interval),
-       max_rows         = COALESCE(@maxRows, max_rows),
-       timeout_seconds  = COALESCE(@timeoutSeconds, timeout_seconds),
-       widget_type      = COALESCE(@widgetType, widget_type),
-       value_column     = COALESCE(@valueColumn, value_column),
-       label_column     = COALESCE(@labelColumn, label_column),
-       is_active        = COALESCE(@isActive, is_active)
-     WHERE id = @id`,
-    [
-      { name: 'id', type: sql.Int, value: id },
-      { name: 'name', type: sql.NVarChar(100), value: data.name ?? null },
-      { name: 'description', type: sql.NVarChar(255), value: data.description ?? null },
-      { name: 'sqlQuery', type: sql.NVarChar(sql.MAX), value: data.sqlQuery ?? null },
-      { name: 'dataSource', type: sql.NVarChar(100), value: data.dataSource ?? null },
-      { name: 'refreshInterval', type: sql.Int, value: data.refreshInterval ?? null },
-      { name: 'maxRows', type: sql.Int, value: data.maxRows ?? null },
-      { name: 'timeoutSeconds', type: sql.Int, value: data.timeoutSeconds ?? null },
-      { name: 'widgetType', type: sql.NVarChar(20), value: data.widgetType ?? null },
-      { name: 'valueColumn', type: sql.NVarChar(100), value: data.valueColumn ?? null },
-      { name: 'labelColumn', type: sql.NVarChar(100), value: data.labelColumn ?? null },
-      { name: 'isActive', type: sql.Bit, value: data.isActive ?? null },
-    ]
+    `UPDATE kpis SET
+       name             = COALESCE($2, name),
+       description      = COALESCE($3, description),
+       sql_query        = COALESCE($4, sql_query),
+       data_source      = COALESCE($5, data_source),
+       refresh_interval = COALESCE($6, refresh_interval),
+       max_rows         = COALESCE($7, max_rows),
+       timeout_seconds  = COALESCE($8, timeout_seconds),
+       widget_type      = COALESCE($9, widget_type),
+       value_column     = COALESCE($10, value_column),
+       label_column     = COALESCE($11, label_column),
+       is_active        = COALESCE($12, is_active)
+     WHERE id = $1`,
+    [id, data.name ?? null, data.description ?? null, data.sqlQuery ?? null, data.dataSource ?? null, data.refreshInterval ?? null, data.maxRows ?? null, data.timeoutSeconds ?? null, data.widgetType ?? null, data.valueColumn ?? null, data.labelColumn ?? null, data.isActive ?? null]
   );
   return findById(id);
 }
 
-/** Un KPI con umbrales o historico no se borra: se desactiva. */
+/** Un KPI con umbrales o historicos no se borra: se desactiva. */
 async function countDependencies(id) {
   const result = await query(
     `SELECT
-       (SELECT COUNT(*) FROM dbo.thresholds WHERE kpi_id = @id) AS thresholds,
-       (SELECT COUNT(*) FROM dbo.alerts     WHERE kpi_id = @id) AS alerts`,
-    [{ name: 'id', type: sql.Int, value: id }]
+       (SELECT COUNT(*) FROM thresholds WHERE kpi_id = $1) AS thresholds,
+       (SELECT COUNT(*) FROM alerts     WHERE kpi_id = $1) AS alerts`,
+    [id]
   );
   return result.recordset[0];
 }
 
 async function remove(id) {
-  await query(`DELETE FROM dbo.kpi_history   WHERE kpi_id = @id`, [{ name: 'id', type: sql.Int, value: id }]);
-  await query(`DELETE FROM dbo.kpi_snapshots WHERE kpi_id = @id`, [{ name: 'id', type: sql.Int, value: id }]);
-  const result = await query(`DELETE FROM dbo.kpis WHERE id = @id`, [{ name: 'id', type: sql.Int, value: id }]);
-  return result.rowsAffected[0] > 0;
+  await query(`DELETE FROM kpi_history   WHERE kpi_id = $1`, [id]);
+  await query(`DELETE FROM kpi_snapshots WHERE kpi_id = $1`, [id]);
+  const result = await query(`DELETE FROM kpis WHERE id = $1`, [id]);
+  return result.rowsAffected > 0;
 }
 
 /* ---------- historico ---------- */
 
 async function saveScalar(kpiId, value) {
   await query(
-    `INSERT INTO dbo.kpi_history (kpi_id, value) VALUES (@kpiId, @value)`,
-    [
-      { name: 'kpiId', type: sql.Int, value: kpiId },
-      { name: 'value', type: sql.Decimal(18, 4), value: value },
-    ]
+    `INSERT INTO kpi_history (kpi_id, value) VALUES ($1, $2)`,
+    [kpiId, value]
   );
 }
 
 async function saveSnapshot(kpiId, payload, rowCount, durationMs) {
   await query(
-    `INSERT INTO dbo.kpi_snapshots (kpi_id, payload, row_count, duration_ms)
-     VALUES (@kpiId, @payload, @rowCount, @durationMs)`,
-    [
-      { name: 'kpiId', type: sql.Int, value: kpiId },
-      { name: 'payload', type: sql.NVarChar(sql.MAX), value: JSON.stringify(payload) },
-      { name: 'rowCount', type: sql.Int, value: rowCount },
-      { name: 'durationMs', type: sql.Int, value: durationMs },
-    ]
+    `INSERT INTO kpi_snapshots (kpi_id, payload, row_count, duration_ms)
+     VALUES ($1, $2, $3, $4)`,
+    [kpiId, JSON.stringify(payload), rowCount, durationMs]
   );
 }
 
 /** Ultimo snapshot, para servir del cache sin volver a golpear el origen. */
 async function latestSnapshot(kpiId, maxAgeSeconds) {
   const result = await query(
-    `SELECT TOP 1 payload, row_count, duration_ms, captured_at
-     FROM dbo.kpi_snapshots
-     WHERE kpi_id = @kpiId
-       AND captured_at > DATEADD(SECOND, -@maxAge, SYSUTCDATETIME())
-     ORDER BY captured_at DESC`,
-    [
-      { name: 'kpiId', type: sql.Int, value: kpiId },
-      { name: 'maxAge', type: sql.Int, value: maxAgeSeconds },
-    ]
+    `SELECT payload, row_count, duration_ms, captured_at
+     FROM kpi_snapshots
+     WHERE kpi_id = $1
+       AND captured_at > NOW() - INTERVAL '1 second' * $2
+     ORDER BY captured_at DESC
+     LIMIT 1`,
+    [kpiId, maxAgeSeconds]
   );
   const row = result.recordset[0];
   if (!row) return null;
@@ -186,18 +148,14 @@ async function latestSnapshot(kpiId, maxAgeSeconds) {
 
 async function history(kpiId, { from, to, limit = 500 }) {
   const result = await query(
-    `SELECT TOP (@limit) recorded_at, value
-     FROM dbo.kpi_history
-     WHERE kpi_id = @kpiId
-       AND (@from IS NULL OR recorded_at >= @from)
-       AND (@to   IS NULL OR recorded_at <= @to)
-     ORDER BY recorded_at DESC`,
-    [
-      { name: 'kpiId', type: sql.Int, value: kpiId },
-      { name: 'from', type: sql.DateTime2, value: from ? new Date(from) : null },
-      { name: 'to', type: sql.DateTime2, value: to ? new Date(to) : null },
-      { name: 'limit', type: sql.Int, value: Math.min(Number(limit) || 500, 5000) },
-    ]
+    `SELECT recorded_at, value
+     FROM kpi_history
+     WHERE kpi_id = $1
+       AND ($2 IS NULL OR recorded_at >= $2)
+       AND ($3 IS NULL OR recorded_at <= $3)
+     ORDER BY recorded_at DESC
+     LIMIT $4`,
+    [kpiId, from ? new Date(from) : null, to ? new Date(to) : null, Math.min(Number(limit) || 500, 5000)]
   );
   return result.recordset.reverse();
 }

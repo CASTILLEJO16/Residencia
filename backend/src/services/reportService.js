@@ -1,7 +1,7 @@
 'use strict';
 const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
-const { sql, query } = require('../config/database');
+const { query } = require('../config/database');
 
 /**
  * Los reportes se generan en el servidor, no en el navegador: un reporte
@@ -19,18 +19,15 @@ const DEFINITIONS = {
     ],
     async fetch(params) {
       const result = await query(
-        `SELECT TOP (@limit) k.name AS kpi_name, h.recorded_at, h.value
-         FROM dbo.kpi_history h
-         INNER JOIN dbo.kpis k ON k.id = h.kpi_id
-         WHERE (@kpiId IS NULL OR h.kpi_id = @kpiId)
-           AND (@from IS NULL OR h.recorded_at >= @from)
-           AND (@to   IS NULL OR h.recorded_at <= @to)
-         ORDER BY h.recorded_at DESC`,
-        [
-          { name: 'kpiId', type: sql.Int, value: params.kpiId ? Number(params.kpiId) : null },
-          ...dateParams(params),
-          { name: 'limit', type: sql.Int, value: limitOf(params) },
-        ]);
+        `SELECT k.name AS kpi_name, h.recorded_at, h.value
+         FROM kpi_history h
+         INNER JOIN kpis k ON k.id = h.kpi_id
+         WHERE ($1 IS NULL OR h.kpi_id = $1)
+           AND ($2 IS NULL OR h.recorded_at >= $2)
+           AND ($3 IS NULL OR h.recorded_at <= $3)
+         ORDER BY h.recorded_at DESC
+         LIMIT $4`,
+        [params.kpiId ? Number(params.kpiId) : null, ...dateParams(params), limitOf(params)]);
       return result.recordset;
     },
   },
@@ -51,26 +48,21 @@ const DEFINITIONS = {
     ],
     async fetch(params) {
       const result = await query(
-        `SELECT TOP (@limit) a.id, k.name AS kpi_name, t.name AS threshold_name,
+        `SELECT a.id, k.name AS kpi_name, t.name AS threshold_name,
                 a.severity, a.status, a.current_value, a.occurrence_count,
                 a.triggered_at, a.resolved_at, u.full_name AS acknowledged_by_name
-         FROM dbo.alerts a
-         INNER JOIN dbo.kpis k       ON k.id = a.kpi_id
-         INNER JOIN dbo.thresholds t ON t.id = a.threshold_id
-         LEFT  JOIN dbo.users u      ON u.id = a.acknowledged_by
-         WHERE (@severity IS NULL OR a.severity = @severity)
-           AND (@status IS NULL OR a.status = @status)
-           AND (@kpiId IS NULL OR a.kpi_id = @kpiId)
-           AND (@from IS NULL OR a.triggered_at >= @from)
-           AND (@to   IS NULL OR a.triggered_at <= @to)
-         ORDER BY a.triggered_at DESC`,
-        [
-          { name: 'severity', type: sql.NVarChar(20), value: params.severity || null },
-          { name: 'status', type: sql.NVarChar(20), value: params.status || null },
-          { name: 'kpiId', type: sql.Int, value: params.kpiId ? Number(params.kpiId) : null },
-          ...dateParams(params),
-          { name: 'limit', type: sql.Int, value: limitOf(params) },
-        ]);
+         FROM alerts a
+         INNER JOIN kpis k       ON k.id = a.kpi_id
+         INNER JOIN thresholds t ON t.id = a.threshold_id
+         LEFT  JOIN users u      ON u.id = a.acknowledged_by
+         WHERE ($1 IS NULL OR a.severity = $1)
+           AND ($2 IS NULL OR a.status = $2)
+           AND ($3 IS NULL OR a.kpi_id = $3)
+           AND ($4 IS NULL OR a.triggered_at >= $4)
+           AND ($5 IS NULL OR a.triggered_at <= $5)
+         ORDER BY a.triggered_at DESC
+         LIMIT $6`,
+        [params.severity || null, params.status || null, params.kpiId ? Number(params.kpiId) : null, ...dateParams(params), limitOf(params)]);
       return result.recordset;
     },
   },
@@ -90,28 +82,23 @@ const DEFINITIONS = {
     ],
     async fetch(params) {
       const result = await query(
-        `SELECT TOP (@limit) t.ticket_number, t.title, t.priority, t.status,
+        `SELECT t.ticket_number, t.title, t.priority, t.status,
                 asg.full_name AS assigned_to_name, crt.full_name AS created_by_name,
                 t.created_at, t.closed_at,
                 CASE WHEN t.closed_at IS NOT NULL
-                     THEN CAST(DATEDIFF(MINUTE, t.created_at, t.closed_at) / 60.0 AS DECIMAL(10,2))
+                     THEN EXTRACT(EPOCH FROM (t.closed_at - t.created_at)) / 3600.0
                      END AS hours_to_close
-         FROM dbo.tickets t
-         LEFT JOIN dbo.users asg ON asg.id = t.assigned_to
-         LEFT JOIN dbo.users crt ON crt.id = t.created_by
-         WHERE (@status IS NULL OR t.status = @status)
-           AND (@priority IS NULL OR t.priority = @priority)
-           AND (@assignedTo IS NULL OR t.assigned_to = @assignedTo)
-           AND (@from IS NULL OR t.created_at >= @from)
-           AND (@to   IS NULL OR t.created_at <= @to)
-         ORDER BY t.created_at DESC`,
-        [
-          { name: 'status', type: sql.NVarChar(20), value: params.status || null },
-          { name: 'priority', type: sql.NVarChar(20), value: params.priority || null },
-          { name: 'assignedTo', type: sql.Int, value: params.assignedTo ? Number(params.assignedTo) : null },
-          ...dateParams(params),
-          { name: 'limit', type: sql.Int, value: limitOf(params) },
-        ]);
+         FROM tickets t
+         LEFT JOIN users asg ON asg.id = t.assigned_to
+         LEFT JOIN users crt ON crt.id = t.created_by
+         WHERE ($1 IS NULL OR t.status = $1)
+           AND ($2 IS NULL OR t.priority = $2)
+           AND ($3 IS NULL OR t.assigned_to = $3)
+           AND ($4 IS NULL OR t.created_at >= $4)
+           AND ($5 IS NULL OR t.created_at <= $5)
+         ORDER BY t.created_at DESC
+         LIMIT $6`,
+        [params.status || null, params.priority || null, params.assignedTo ? Number(params.assignedTo) : null, ...dateParams(params), limitOf(params)]);
       return result.recordset;
     },
   },
@@ -129,22 +116,17 @@ const DEFINITIONS = {
     ],
     async fetch(params) {
       const result = await query(
-        `SELECT TOP (@limit) a.created_at, a.username, a.action, a.entity_type,
+        `SELECT a.created_at, a.username, a.action, a.entity_type,
                 a.entity_id, a.ip_address, a.status_code
-         FROM dbo.audit_logs a
-         WHERE (@userId IS NULL OR a.user_id = @userId)
-           AND (@action IS NULL OR a.action = @action)
-           AND (@entityType IS NULL OR a.entity_type = @entityType)
-           AND (@from IS NULL OR a.created_at >= @from)
-           AND (@to   IS NULL OR a.created_at <= @to)
-         ORDER BY a.created_at DESC`,
-        [
-          { name: 'userId', type: sql.Int, value: params.userId ? Number(params.userId) : null },
-          { name: 'action', type: sql.NVarChar(100), value: params.action || null },
-          { name: 'entityType', type: sql.NVarChar(50), value: params.entityType || null },
-          ...dateParams(params),
-          { name: 'limit', type: sql.Int, value: limitOf(params) },
-        ]);
+         FROM audit_logs a
+         WHERE ($1 IS NULL OR a.user_id = $1)
+           AND ($2 IS NULL OR a.action = $2)
+           AND ($3 IS NULL OR a.entity_type = $3)
+           AND ($4 IS NULL OR a.created_at >= $4)
+           AND ($5 IS NULL OR a.created_at <= $5)
+         ORDER BY a.created_at DESC
+         LIMIT $6`,
+        [params.userId ? Number(params.userId) : null, params.action || null, params.entityType || null, ...dateParams(params), limitOf(params)]);
       return result.recordset;
     },
   },
@@ -152,8 +134,8 @@ const DEFINITIONS = {
 
 function dateParams(params) {
   return [
-    { name: 'from', type: sql.DateTime2, value: params.from ? new Date(params.from) : null },
-    { name: 'to', type: sql.DateTime2, value: params.to ? new Date(params.to) : null },
+    params.from ? new Date(params.from) : null,
+    params.to ? new Date(params.to) : null,
   ];
 }
 

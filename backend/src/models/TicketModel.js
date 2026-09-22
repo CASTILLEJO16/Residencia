@@ -1,5 +1,5 @@
 'use strict';
-const { sql, query } = require('../config/database');
+const { query } = require('../config/database');
 const { parsePagination, buildMeta, safeSort } = require('../utils/pagination');
 
 const FIELDS = `
@@ -13,19 +13,18 @@ const FIELDS = `
   a.severity AS alert_severity, a.kpi_id, k.name AS kpi_name`;
 
 const JOINS = `
-  FROM dbo.tickets t
-  LEFT JOIN dbo.users asg ON asg.id = t.assigned_to
-  LEFT JOIN dbo.users esc ON esc.id = t.escalated_to
-  LEFT JOIN dbo.users crt ON crt.id = t.created_by
-  LEFT JOIN dbo.users cls ON cls.id = t.closed_by
-  LEFT JOIN dbo.alerts a  ON a.id = t.alert_id
-  LEFT JOIN dbo.kpis k    ON k.id = a.kpi_id`;
+  FROM tickets t
+  LEFT JOIN users asg ON asg.id = t.assigned_to
+  LEFT JOIN users esc ON esc.id = t.escalated_to
+  LEFT JOIN users crt ON crt.id = t.created_by
+  LEFT JOIN users cls ON cls.id = t.closed_by
+  LEFT JOIN alerts a  ON a.id = t.alert_id
+  LEFT JOIN kpis k    ON k.id = a.kpi_id`;
 
 const SORTABLE = ['created_at', 'updated_at', 'priority', 'status', 'due_date'];
 
 async function findById(id) {
-  const result = await query(`SELECT ${FIELDS} ${JOINS} WHERE t.id = @id`,
-    [{ name: 'id', type: sql.Int, value: id }]);
+  const result = await query(`SELECT ${FIELDS} ${JOINS} WHERE t.id = $1`, [id]);
   return result.recordset[0] || null;
 }
 
@@ -33,31 +32,31 @@ async function list(params) {
   const { page, limit, offset } = parsePagination(params);
   const { column, direction } = safeSort(params.sort, SORTABLE, 'created_at');
   const args = [
-    { name: 'status', type: sql.NVarChar(20), value: params.status || null },
-    { name: 'priority', type: sql.NVarChar(20), value: params.priority || null },
-    { name: 'assignedTo', type: sql.Int, value: params.assignedTo ? Number(params.assignedTo) : null },
-    { name: 'createdBy', type: sql.Int, value: params.createdBy ? Number(params.createdBy) : null },
-    { name: 'search', type: sql.NVarChar(200), value: params.search ? `%${params.search}%` : null },
-    { name: 'unassigned', type: sql.Bit, value: params.unassigned === 'true' ? 1 : null },
-    { name: 'overdue', type: sql.Bit, value: params.overdue === 'true' ? 1 : null },
-    { name: 'offset', type: sql.Int, value: offset },
-    { name: 'limit', type: sql.Int, value: limit },
+    params.status || null,
+    params.priority || null,
+    params.assignedTo ? Number(params.assignedTo) : null,
+    params.createdBy ? Number(params.createdBy) : null,
+    params.search ? `%${params.search}%` : null,
+    params.unassigned === 'true' ? true : null,
+    params.overdue === 'true' ? true : null,
+    offset,
+    limit,
   ];
   const where = `
-    WHERE (@status IS NULL OR t.status = @status)
-      AND (@priority IS NULL OR t.priority = @priority)
-      AND (@assignedTo IS NULL OR t.assigned_to = @assignedTo)
-      AND (@createdBy IS NULL OR t.created_by = @createdBy)
-      AND (@search IS NULL OR t.title LIKE @search OR t.description LIKE @search)
-      AND (@unassigned IS NULL OR t.assigned_to IS NULL)
-      AND (@overdue IS NULL OR (t.due_date < SYSUTCDATETIME() AND t.status <> 'closed'))`;
+    WHERE ($1 IS NULL OR t.status = $1)
+      AND ($2 IS NULL OR t.priority = $2)
+      AND ($3 IS NULL OR t.assigned_to = $3)
+      AND ($4 IS NULL OR t.created_by = $4)
+      AND ($5 IS NULL OR t.title LIKE $5 OR t.description LIKE $5)
+      AND ($6 IS NULL OR t.assigned_to IS NULL)
+      AND ($7 IS NULL OR (t.due_date < NOW() AND t.status <> 'closed'))`;
 
   const rows = await query(
     `SELECT ${FIELDS} ${JOINS} ${where}
      ORDER BY ${column === 'priority'
        ? `CASE t.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END`
        : `t.${column}`} ${direction}
-     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`, args);
+     LIMIT $9 OFFSET $8`, args);
 
   const count = await query(`SELECT COUNT(*) AS total ${JOINS} ${where}`, args.slice(0, 7));
   return { data: rows.recordset, meta: buildMeta(count.recordset[0].total, page, limit) };
@@ -65,82 +64,57 @@ async function list(params) {
 
 async function create(data, userId) {
   const result = await query(
-    `INSERT INTO dbo.tickets (title, description, alert_id, priority, assigned_to, due_date, created_by)
-     OUTPUT INSERTED.id
-     VALUES (@title, @description, @alertId, @priority, @assignedTo, @dueDate, @createdBy)`,
-    [
-      { name: 'title', type: sql.NVarChar(200), value: data.title },
-      { name: 'description', type: sql.NVarChar(sql.MAX), value: data.description ?? null },
-      { name: 'alertId', type: sql.BigInt, value: data.alertId ?? null },
-      { name: 'priority', type: sql.NVarChar(20), value: data.priority },
-      { name: 'assignedTo', type: sql.Int, value: data.assignedTo ?? null },
-      { name: 'dueDate', type: sql.DateTime2, value: data.dueDate ? new Date(data.dueDate) : null },
-      { name: 'createdBy', type: sql.Int, value: userId },
-    ]);
+    `INSERT INTO tickets (title, description, alert_id, priority, assigned_to, due_date, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id`,
+    [data.title, data.description ?? null, data.alertId ?? null, data.priority, data.assignedTo ?? null, data.dueDate ? new Date(data.dueDate) : null, userId]);
   return findById(result.recordset[0].id);
 }
 
 async function update(id, data) {
   await query(
-    `UPDATE dbo.tickets SET
-       title       = COALESCE(@title, title),
-       description = COALESCE(@description, description),
-       priority    = COALESCE(@priority, priority),
-       due_date    = COALESCE(@dueDate, due_date)
-     WHERE id = @id`,
-    [
-      { name: 'id', type: sql.Int, value: id },
-      { name: 'title', type: sql.NVarChar(200), value: data.title ?? null },
-      { name: 'description', type: sql.NVarChar(sql.MAX), value: data.description ?? null },
-      { name: 'priority', type: sql.NVarChar(20), value: data.priority ?? null },
-      { name: 'dueDate', type: sql.DateTime2, value: data.dueDate ? new Date(data.dueDate) : null },
-    ]);
+    `UPDATE tickets SET
+       title       = COALESCE($2, title),
+       description = COALESCE($3, description),
+       priority    = COALESCE($4, priority),
+       due_date    = COALESCE($5, due_date)
+     WHERE id = $1`,
+    [id, data.title ?? null, data.description ?? null, data.priority ?? null, data.dueDate ? new Date(data.dueDate) : null]);
   return findById(id);
 }
 
 async function assign(id, assignedTo) {
   await query(
-    `UPDATE dbo.tickets
-     SET assigned_to = @assignedTo,
-         status = CASE WHEN status = 'open' AND @assignedTo IS NOT NULL
+    `UPDATE tickets
+     SET assigned_to = $2,
+         status = CASE WHEN status = 'open' AND $2 IS NOT NULL
                        THEN 'in_progress' ELSE status END
-     WHERE id = @id`,
-    [
-      { name: 'id', type: sql.Int, value: id },
-      { name: 'assignedTo', type: sql.Int, value: assignedTo },
-    ]);
+     WHERE id = $1`,
+    [id, assignedTo]);
   return findById(id);
 }
 
 async function escalate(id, escalatedTo) {
   await query(
-    `UPDATE dbo.tickets
-     SET escalated_to = @escalatedTo,
+    `UPDATE tickets
+     SET escalated_to = $2,
          escalation_level = escalation_level + 1,
          status = 'escalated'
-     WHERE id = @id`,
-    [
-      { name: 'id', type: sql.Int, value: id },
-      { name: 'escalatedTo', type: sql.Int, value: escalatedTo },
-    ]);
+     WHERE id = $1`,
+    [id, escalatedTo]);
   return findById(id);
 }
 
 async function changeStatus(id, status, userId, resolution) {
   const closing = status === 'closed';
   await query(
-    `UPDATE dbo.tickets SET
-       status     = @status,
-       closed_at  = ${closing ? 'SYSUTCDATETIME()' : 'NULL'},
-       closed_by  = ${closing ? '@userId' : 'NULL'},
-       resolution = COALESCE(@resolution, resolution)
-     WHERE id = @id`,
-    [
-      { name: 'id', type: sql.Int, value: id },
-      { name: 'status', type: sql.NVarChar(20), value: status },
-      { name: 'userId', type: sql.Int, value: userId },
-      { name: 'resolution', type: sql.NVarChar(sql.MAX), value: resolution ?? null },
-    ]);
+    `UPDATE tickets SET
+       status     = $2,
+       closed_at  = ${closing ? 'NOW()' : 'NULL'},
+       closed_by  = ${closing ? '$3' : 'NULL'},
+       resolution = COALESCE($4, resolution)
+     WHERE id = $1`,
+    [id, status, userId, resolution ?? null]);
   return findById(id);
 }
 
@@ -148,29 +122,21 @@ async function changeStatus(id, status, userId, resolution) {
 
 async function addHistory({ ticketId, changedBy, action, fieldName, oldValue, newValue, comment }) {
   await query(
-    `INSERT INTO dbo.ticket_history
+    `INSERT INTO ticket_history
        (ticket_id, changed_by, action, field_name, old_value, new_value, comment)
-     VALUES (@ticketId, @changedBy, @action, @fieldName, @oldValue, @newValue, @comment)`,
-    [
-      { name: 'ticketId', type: sql.Int, value: ticketId },
-      { name: 'changedBy', type: sql.Int, value: changedBy },
-      { name: 'action', type: sql.NVarChar(50), value: action },
-      { name: 'fieldName', type: sql.NVarChar(50), value: fieldName ?? null },
-      { name: 'oldValue', type: sql.NVarChar(255), value: oldValue != null ? String(oldValue).slice(0, 255) : null },
-      { name: 'newValue', type: sql.NVarChar(255), value: newValue != null ? String(newValue).slice(0, 255) : null },
-      { name: 'comment', type: sql.NVarChar(sql.MAX), value: comment ?? null },
-    ]);
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [ticketId, changedBy, action, fieldName ?? null, oldValue != null ? String(oldValue).slice(0, 255) : null, newValue != null ? String(newValue).slice(0, 255) : null, comment ?? null]);
 }
 
 async function getHistory(ticketId) {
   const result = await query(
     `SELECT h.id, h.action, h.field_name, h.old_value, h.new_value, h.comment,
             h.created_at, h.changed_by, u.full_name AS changed_by_name
-     FROM dbo.ticket_history h
-     INNER JOIN dbo.users u ON u.id = h.changed_by
-     WHERE h.ticket_id = @ticketId
+     FROM ticket_history h
+     INNER JOIN users u ON u.id = h.changed_by
+     WHERE h.ticket_id = $1
      ORDER BY h.created_at ASC, h.id ASC`,
-    [{ name: 'ticketId', type: sql.Int, value: ticketId }]);
+    [ticketId]);
   return result.recordset;
 }
 
@@ -182,11 +148,11 @@ async function summary(userId) {
        SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
        SUM(CASE WHEN status = 'escalated' THEN 1 ELSE 0 END) AS escalated_count,
        SUM(CASE WHEN status <> 'closed' AND assigned_to IS NULL THEN 1 ELSE 0 END) AS unassigned_count,
-       SUM(CASE WHEN status <> 'closed' AND assigned_to = @userId THEN 1 ELSE 0 END) AS mine_count,
-       SUM(CASE WHEN status <> 'closed' AND due_date < SYSUTCDATETIME() THEN 1 ELSE 0 END) AS overdue_count,
-       SUM(CASE WHEN closed_at > DATEADD(DAY,-7,SYSUTCDATETIME()) THEN 1 ELSE 0 END) AS closed_last_7d
-     FROM dbo.tickets`,
-    [{ name: 'userId', type: sql.Int, value: userId ?? null }]);
+       SUM(CASE WHEN status <> 'closed' AND assigned_to = $1 THEN 1 ELSE 0 END) AS mine_count,
+       SUM(CASE WHEN status <> 'closed' AND due_date < NOW() THEN 1 ELSE 0 END) AS overdue_count,
+       SUM(CASE WHEN closed_at > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) AS closed_last_7d
+     FROM tickets`,
+    [userId ?? null]);
   return result.recordset[0];
 }
 

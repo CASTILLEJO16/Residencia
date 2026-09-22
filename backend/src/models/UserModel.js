@@ -1,5 +1,5 @@
 'use strict';
-const { sql, query } = require('../config/database');
+const { query } = require('../config/database');
 const { parsePagination, buildMeta, safeSort } = require('../utils/pagination');
 
 /** Columnas publicas: nunca se expone password_hash. */
@@ -12,9 +12,9 @@ const SORTABLE = ['username', 'email', 'full_name', 'created_at', 'last_login'];
 async function findById(id) {
   const result = await query(
     `SELECT ${PUBLIC_FIELDS}
-     FROM dbo.users u INNER JOIN dbo.roles r ON r.id = u.role_id
-     WHERE u.id = @id`,
-    [{ name: 'id', type: sql.Int, value: id }]
+     FROM users u INNER JOIN roles r ON r.id = u.role_id
+     WHERE u.id = $1`,
+    [id]
   );
   return result.recordset[0] || null;
 }
@@ -25,31 +25,28 @@ async function findByUsernameWithSecret(username) {
     `SELECT u.id, u.username, u.email, u.full_name, u.password_hash, u.role_id,
             r.name AS role_name, u.is_active, u.must_change_password,
             u.failed_login_attempts, u.locked_until
-     FROM dbo.users u INNER JOIN dbo.roles r ON r.id = u.role_id
-     WHERE u.username = @username`,
-    [{ name: 'username', type: sql.NVarChar(50), value: username }]
+     FROM users u INNER JOIN roles r ON r.id = u.role_id
+     WHERE u.username = $1`,
+    [username]
   );
   return result.recordset[0] || null;
 }
 
 async function findPasswordHash(id) {
   const result = await query(
-    `SELECT password_hash FROM dbo.users WHERE id = @id`,
-    [{ name: 'id', type: sql.Int, value: id }]
+    `SELECT password_hash FROM users WHERE id = $1`,
+    [id]
   );
   return result.recordset[0]?.password_hash || null;
 }
 
 async function existsByUsernameOrEmail(username, email, excludeId = null) {
   const result = await query(
-    `SELECT TOP 1 id FROM dbo.users
-     WHERE (username = @username OR email = @email)
-       AND (@excludeId IS NULL OR id <> @excludeId)`,
-    [
-      { name: 'username', type: sql.NVarChar(50), value: username },
-      { name: 'email', type: sql.NVarChar(150), value: email },
-      { name: 'excludeId', type: sql.Int, value: excludeId },
-    ]
+    `SELECT id FROM users
+     WHERE (username = $1 OR email = $2)
+       AND ($3 IS NULL OR id <> $3)
+     LIMIT 1`,
+    [username, email, excludeId]
   );
   return result.recordset.length > 0;
 }
@@ -62,32 +59,26 @@ async function list(queryParams) {
   const isActive = queryParams.isActive === undefined || queryParams.isActive === ''
     ? null : queryParams.isActive === 'true';
 
-  const params = [
-    { name: 'search', type: sql.NVarChar(200), value: search },
-    { name: 'roleId', type: sql.Int, value: roleId },
-    { name: 'isActive', type: sql.Bit, value: isActive },
-    { name: 'offset', type: sql.Int, value: offset },
-    { name: 'limit', type: sql.Int, value: limit },
-  ];
+  const params = [search, roleId, isActive, offset, limit];
 
   const where = `
-    WHERE (@search IS NULL OR u.username LIKE @search OR u.full_name LIKE @search OR u.email LIKE @search)
-      AND (@roleId IS NULL OR u.role_id = @roleId)
-      AND (@isActive IS NULL OR u.is_active = @isActive)`;
+    WHERE ($1 IS NULL OR u.username LIKE $1 OR u.full_name LIKE $1 OR u.email LIKE $1)
+      AND ($2 IS NULL OR u.role_id = $2)
+      AND ($3 IS NULL OR u.is_active = $3)`;
 
   const rows = await query(
     `SELECT ${PUBLIC_FIELDS}
-     FROM dbo.users u INNER JOIN dbo.roles r ON r.id = u.role_id
+     FROM users u INNER JOIN roles r ON r.id = u.role_id
      ${where}
      ORDER BY u.${column} ${direction}
-     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`,
+     LIMIT $5 OFFSET $4`,
     params
   );
 
   const count = await query(
     `SELECT COUNT(*) AS total
-     FROM dbo.users u INNER JOIN dbo.roles r ON r.id = u.role_id ${where}`,
-    params.slice(0, 3)
+     FROM users u INNER JOIN roles r ON r.id = u.role_id ${where}`,
+    [search, roleId, isActive]
   );
 
   return { data: rows.recordset, meta: buildMeta(count.recordset[0].total, page, limit) };
@@ -95,100 +86,76 @@ async function list(queryParams) {
 
 async function create({ username, email, fullName, passwordHash, roleId, mustChangePassword = true }) {
   const result = await query(
-    `INSERT INTO dbo.users (username, email, full_name, password_hash, role_id, must_change_password)
-     OUTPUT INSERTED.id
-     VALUES (@username, @email, @fullName, @passwordHash, @roleId, @mustChange)`,
-    [
-      { name: 'username', type: sql.NVarChar(50), value: username },
-      { name: 'email', type: sql.NVarChar(150), value: email },
-      { name: 'fullName', type: sql.NVarChar(150), value: fullName },
-      { name: 'passwordHash', type: sql.NVarChar(255), value: passwordHash },
-      { name: 'roleId', type: sql.Int, value: roleId },
-      { name: 'mustChange', type: sql.Bit, value: mustChangePassword },
-    ]
+    `INSERT INTO users (username, email, full_name, password_hash, role_id, must_change_password)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id`,
+    [username, email, fullName, passwordHash, roleId, mustChangePassword]
   );
   return findById(result.recordset[0].id);
 }
 
 async function update(id, { email, fullName, roleId, isActive }) {
   await query(
-    `UPDATE dbo.users
-     SET email      = COALESCE(@email, email),
-         full_name  = COALESCE(@fullName, full_name),
-         role_id    = COALESCE(@roleId, role_id),
-         is_active  = COALESCE(@isActive, is_active)
-     WHERE id = @id`,
-    [
-      { name: 'id', type: sql.Int, value: id },
-      { name: 'email', type: sql.NVarChar(150), value: email ?? null },
-      { name: 'fullName', type: sql.NVarChar(150), value: fullName ?? null },
-      { name: 'roleId', type: sql.Int, value: roleId ?? null },
-      { name: 'isActive', type: sql.Bit, value: isActive ?? null },
-    ]
+    `UPDATE users
+     SET email      = COALESCE($2, email),
+         full_name  = COALESCE($3, full_name),
+         role_id    = COALESCE($4, role_id),
+         is_active  = COALESCE($5, is_active)
+     WHERE id = $1`,
+    [id, email, fullName, roleId, isActive]
   );
   return findById(id);
 }
 
 async function setPassword(id, passwordHash, { mustChange = false } = {}) {
   await query(
-    `UPDATE dbo.users
-     SET password_hash = @hash,
-         must_change_password = @mustChange,
+    `UPDATE users
+     SET password_hash = $2,
+         must_change_password = $3,
          failed_login_attempts = 0,
          locked_until = NULL
-     WHERE id = @id`,
-    [
-      { name: 'id', type: sql.Int, value: id },
-      { name: 'hash', type: sql.NVarChar(255), value: passwordHash },
-      { name: 'mustChange', type: sql.Bit, value: mustChange },
-    ]
+     WHERE id = $1`,
+    [id, passwordHash, mustChange]
   );
 }
 
 async function setActive(id, isActive) {
   await query(
-    `UPDATE dbo.users SET is_active = @isActive WHERE id = @id`,
-    [
-      { name: 'id', type: sql.Int, value: id },
-      { name: 'isActive', type: sql.Bit, value: isActive },
-    ]
+    `UPDATE users SET is_active = $2 WHERE id = $1`,
+    [id, isActive]
   );
   return findById(id);
 }
 
 async function registerSuccessfulLogin(id) {
   await query(
-    `UPDATE dbo.users
-     SET last_login = SYSUTCDATETIME(), failed_login_attempts = 0, locked_until = NULL
-     WHERE id = @id`,
-    [{ name: 'id', type: sql.Int, value: id }]
+    `UPDATE users
+     SET last_login = NOW(), failed_login_attempts = 0, locked_until = NULL
+     WHERE id = $1`,
+    [id]
   );
 }
 
 /** Incrementa el contador y bloquea la cuenta si se pasa del limite. */
 async function registerFailedLogin(id, maxAttempts, lockoutMinutes) {
   const result = await query(
-    `UPDATE dbo.users
+    `UPDATE users
      SET failed_login_attempts = failed_login_attempts + 1,
          locked_until = CASE
-             WHEN failed_login_attempts + 1 >= @maxAttempts
-             THEN DATEADD(MINUTE, @lockout, SYSUTCDATETIME())
+             WHEN failed_login_attempts + 1 >= $2
+             THEN NOW() + INTERVAL '1 minute' * $3
              ELSE locked_until END
-     OUTPUT INSERTED.failed_login_attempts, INSERTED.locked_until
-     WHERE id = @id`,
-    [
-      { name: 'id', type: sql.Int, value: id },
-      { name: 'maxAttempts', type: sql.Int, value: maxAttempts },
-      { name: 'lockout', type: sql.Int, value: lockoutMinutes },
-    ]
+     WHERE id = $1
+     RETURNING failed_login_attempts, locked_until`,
+    [id, maxAttempts, lockoutMinutes]
   );
   return result.recordset[0];
 }
 
 async function unlock(id) {
   await query(
-    `UPDATE dbo.users SET failed_login_attempts = 0, locked_until = NULL WHERE id = @id`,
-    [{ name: 'id', type: sql.Int, value: id }]
+    `UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1`,
+    [id]
   );
   return findById(id);
 }
@@ -198,9 +165,9 @@ async function getAuthState(id) {
   const result = await query(
     `SELECT u.id, u.username, u.is_active, u.must_change_password,
             u.role_id, r.name AS role_name
-     FROM dbo.users u INNER JOIN dbo.roles r ON r.id = u.role_id
-     WHERE u.id = @id`,
-    [{ name: 'id', type: sql.Int, value: id }]
+     FROM users u INNER JOIN roles r ON r.id = u.role_id
+     WHERE u.id = $1`,
+    [id]
   );
   return result.recordset[0] || null;
 }
