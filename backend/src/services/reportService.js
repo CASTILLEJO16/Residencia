@@ -18,16 +18,19 @@ const DEFINITIONS = {
       { key: 'value', header: 'Valor', width: 16, type: 'number' },
     ],
     async fetch(params) {
+      const kpiId = params.kpiId ? Number(params.kpiId) : null;
+      const [from, to] = dateParams(params);
+      const limit = limitOf(params);
       const result = await query(
         `SELECT k.name AS kpi_name, h.recorded_at, h.value
          FROM kpi_history h
          INNER JOIN kpis k ON k.id = h.kpi_id
-         WHERE ($1 IS NULL OR h.kpi_id = $1)
-           AND ($2 IS NULL OR h.recorded_at >= $2)
-           AND ($3 IS NULL OR h.recorded_at <= $3)
+         WHERE (? IS NULL OR h.kpi_id = ?)
+           AND (? IS NULL OR h.recorded_at >= ?)
+           AND (? IS NULL OR h.recorded_at <= ?)
          ORDER BY h.recorded_at DESC
-         LIMIT $4`,
-        [params.kpiId ? Number(params.kpiId) : null, ...dateParams(params), limitOf(params)]);
+         LIMIT ?`,
+        [kpiId, kpiId, from, from, to, to, limit]);
       return result.recordset;
     },
   },
@@ -47,6 +50,11 @@ const DEFINITIONS = {
       { key: 'acknowledged_by_name', header: 'Atendida por', width: 24 },
     ],
     async fetch(params) {
+      const severity = params.severity || null;
+      const status = params.status || null;
+      const kpiId = params.kpiId ? Number(params.kpiId) : null;
+      const [from, to] = dateParams(params);
+      const limit = limitOf(params);
       const result = await query(
         `SELECT a.id, k.name AS kpi_name, t.name AS threshold_name,
                 a.severity, a.status, a.current_value, a.occurrence_count,
@@ -55,14 +63,14 @@ const DEFINITIONS = {
          INNER JOIN kpis k       ON k.id = a.kpi_id
          INNER JOIN thresholds t ON t.id = a.threshold_id
          LEFT  JOIN users u      ON u.id = a.acknowledged_by
-         WHERE ($1 IS NULL OR a.severity = $1)
-           AND ($2 IS NULL OR a.status = $2)
-           AND ($3 IS NULL OR a.kpi_id = $3)
-           AND ($4 IS NULL OR a.triggered_at >= $4)
-           AND ($5 IS NULL OR a.triggered_at <= $5)
+         WHERE (? IS NULL OR a.severity = ?)
+           AND (? IS NULL OR a.status = ?)
+           AND (? IS NULL OR a.kpi_id = ?)
+           AND (? IS NULL OR a.triggered_at >= ?)
+           AND (? IS NULL OR a.triggered_at <= ?)
          ORDER BY a.triggered_at DESC
-         LIMIT $6`,
-        [params.severity || null, params.status || null, params.kpiId ? Number(params.kpiId) : null, ...dateParams(params), limitOf(params)]);
+         LIMIT ?`,
+        [severity, severity, status, status, kpiId, kpiId, from, from, to, to, limit]);
       return result.recordset;
     },
   },
@@ -81,24 +89,29 @@ const DEFINITIONS = {
       { key: 'hours_to_close', header: 'Horas para cerrar', width: 18, type: 'number' },
     ],
     async fetch(params) {
+      const status = params.status || null;
+      const priority = params.priority || null;
+      const assignedTo = params.assignedTo ? Number(params.assignedTo) : null;
+      const [from, to] = dateParams(params);
+      const limit = limitOf(params);
       const result = await query(
         `SELECT t.ticket_number, t.title, t.priority, t.status,
                 asg.full_name AS assigned_to_name, crt.full_name AS created_by_name,
                 t.created_at, t.closed_at,
                 CASE WHEN t.closed_at IS NOT NULL
-                     THEN EXTRACT(EPOCH FROM (t.closed_at - t.created_at)) / 3600.0
+                     THEN (julianday(t.closed_at) - julianday(t.created_at)) * 24
                      END AS hours_to_close
          FROM tickets t
          LEFT JOIN users asg ON asg.id = t.assigned_to
          LEFT JOIN users crt ON crt.id = t.created_by
-         WHERE ($1 IS NULL OR t.status = $1)
-           AND ($2 IS NULL OR t.priority = $2)
-           AND ($3 IS NULL OR t.assigned_to = $3)
-           AND ($4 IS NULL OR t.created_at >= $4)
-           AND ($5 IS NULL OR t.created_at <= $5)
+         WHERE (? IS NULL OR t.status = ?)
+           AND (? IS NULL OR t.priority = ?)
+           AND (? IS NULL OR t.assigned_to = ?)
+           AND (? IS NULL OR t.created_at >= ?)
+           AND (? IS NULL OR t.created_at <= ?)
          ORDER BY t.created_at DESC
-         LIMIT $6`,
-        [params.status || null, params.priority || null, params.assignedTo ? Number(params.assignedTo) : null, ...dateParams(params), limitOf(params)]);
+         LIMIT ?`,
+        [status, status, priority, priority, assignedTo, assignedTo, from, from, to, to, limit]);
       return result.recordset;
     },
   },
@@ -115,18 +128,23 @@ const DEFINITIONS = {
       { key: 'status_code', header: 'HTTP', width: 8, type: 'number' },
     ],
     async fetch(params) {
+      const userId = params.userId ? Number(params.userId) : null;
+      const action = params.action || null;
+      const entityType = params.entityType || null;
+      const [from, to] = dateParams(params);
+      const limit = limitOf(params);
       const result = await query(
         `SELECT a.created_at, a.username, a.action, a.entity_type,
                 a.entity_id, a.ip_address, a.status_code
          FROM audit_logs a
-         WHERE ($1 IS NULL OR a.user_id = $1)
-           AND ($2 IS NULL OR a.action = $2)
-           AND ($3 IS NULL OR a.entity_type = $3)
-           AND ($4 IS NULL OR a.created_at >= $4)
-           AND ($5 IS NULL OR a.created_at <= $5)
+         WHERE (? IS NULL OR a.user_id = ?)
+           AND (? IS NULL OR a.action = ?)
+           AND (? IS NULL OR a.entity_type = ?)
+           AND (? IS NULL OR a.created_at >= ?)
+           AND (? IS NULL OR a.created_at <= ?)
          ORDER BY a.created_at DESC
-         LIMIT $6`,
-        [params.userId ? Number(params.userId) : null, params.action || null, params.entityType || null, ...dateParams(params), limitOf(params)]);
+         LIMIT ?`,
+        [userId, userId, action, action, entityType, entityType, from, from, to, to, limit]);
       return result.recordset;
     },
   },

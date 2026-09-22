@@ -35,13 +35,13 @@ async function monitorTick() {
 async function purgeTick() {
   try {
     // Purgar historicos de KPIs mayores a 90 dias
-    await query(`DELETE FROM kpi_history WHERE recorded_at < NOW() - INTERVAL '90 days'`);
+    await query(`DELETE FROM kpi_history WHERE recorded_at < datetime('now') - '+90 days'`);
     // Purgar snapshots mayores a 7 dias
-    await query(`DELETE FROM kpi_snapshots WHERE duration_ms < NOW() - INTERVAL '7 days'`);
+    await query(`DELETE FROM kpi_snapshots WHERE duration_ms < datetime('now') - '+7 days'`);
     // Purgar alertas resueltas mayores a 30 dias
-    await query(`DELETE FROM alerts WHERE status = 'resolved' AND resolved_at < NOW() - INTERVAL '30 days'`);
+    await query(`DELETE FROM alerts WHERE status = 'resolved' AND resolved_at < datetime('now') - '+30 days'`);
     // Purgar tickets cerrados mayores a 180 dias
-    await query(`DELETE FROM tickets WHERE status = 'closed' AND closed_at < NOW() - INTERVAL '180 days'`);
+    await query(`DELETE FROM tickets WHERE status = 'closed' AND closed_at < datetime('now') - '+180 days'`);
     console.log('[purga] historicos depurados');
   } catch (err) {
     console.error('[purga] fallo:', err.message);

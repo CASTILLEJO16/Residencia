@@ -1,13 +1,13 @@
 'use strict';
 const app = require('./app');
 const config = require('./config/env');
-const { getPool, closeAll } = require('./config/database');
+const { initDb, closeAll } = require('./config/database');
 const scheduler = require('./services/schedulerService');
 
 async function start() {
   try {
-    await getPool();
-    console.log(`[db] conectado a ${config.db.database}@${config.db.server}`);
+    await initDb();
+    console.log(`[db] SQLite conectado`);
   } catch (err) {
     console.error('[db] no se pudo conectar:', err.message);
     process.exit(1);

@@ -1,5 +1,5 @@
 'use strict';
-const { query } = require('../config/database');
+const { query, getLastInsertId } = require('../config/database');
 
 const BASE_SELECT = `
   SELECT r.id, r.name, r.description, r.created_at, r.updated_at,
@@ -12,39 +12,39 @@ async function findAll() {
 }
 
 async function findById(id) {
-  const result = await query(`${BASE_SELECT} WHERE r.id = $1`, [id]);
+  const result = await query(`${BASE_SELECT} WHERE r.id = ?`, [id]);
   return result.recordset[0] || null;
 }
 
 async function findByName(name) {
-  const result = await query(`${BASE_SELECT} WHERE r.name = $1`, [name]);
+  const result = await query(`${BASE_SELECT} WHERE r.name = ?`, [name]);
   return result.recordset[0] || null;
 }
 
 async function create({ name, description }) {
-  const result = await query(
+  await query(
     `INSERT INTO roles (name, description)
-     VALUES ($1, $2)
-     RETURNING id`,
+     VALUES (?, ?)`,
     [name, description]
   );
-  return findById(result.recordset[0].id);
+  const id = getLastInsertId();
+  return findById(id);
 }
 
 async function update(id, { name, description }) {
   await query(
     `UPDATE roles
-     SET name = COALESCE($2, name),
-         description = COALESCE($3, description)
-     WHERE id = $1`,
-    [id, name, description]
+     SET name = COALESCE(?, name),
+         description = COALESCE(?, description)
+     WHERE id = ?`,
+    [name, description, id]
   );
   return findById(id);
 }
 
 async function remove(id) {
   const result = await query(
-    `DELETE FROM roles WHERE id = $1`,
+    `DELETE FROM roles WHERE id = ?`,
     [id]
   );
   return result.rowsAffected > 0;

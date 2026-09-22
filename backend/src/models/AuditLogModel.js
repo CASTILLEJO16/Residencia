@@ -12,7 +12,7 @@ async function write(entry) {
       `INSERT INTO audit_logs
          (user_id, username, action, entity_type, entity_id, http_method,
           endpoint, status_code, ip_address, user_agent, old_values, new_values)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         entry.userId ?? null,
         entry.username ?? null,
@@ -51,11 +51,11 @@ async function list(queryParams) {
   ];
 
   const where = `
-    WHERE ($1 IS NULL OR a.user_id = $1)
-      AND ($2 IS NULL OR a.action = $2)
-      AND ($3 IS NULL OR a.entity_type = $3)
-      AND ($4 IS NULL OR a.created_at >= $4)
-      AND ($5 IS NULL OR a.created_at <= $5)`;
+    WHERE (? IS NULL OR a.user_id = ?)
+      AND (? IS NULL OR a.action = ?)
+      AND (? IS NULL OR a.entity_type = ?)
+      AND (? IS NULL OR a.created_at >= ?)
+      AND (? IS NULL OR a.created_at <= ?)`;
 
   const rows = await query(
     `SELECT a.id, a.user_id, a.username, a.action, a.entity_type, a.entity_id,
@@ -63,13 +63,13 @@ async function list(queryParams) {
             a.old_values, a.new_values, a.created_at
      FROM audit_logs a ${where}
      ORDER BY a.created_at DESC
-     LIMIT $7 OFFSET $6`,
-    params
+     LIMIT ? OFFSET ?`,
+    [params[0], params[0], params[1], params[1], params[2], params[2], params[3], params[3], params[4], params[4], params[5], params[6]]
   );
 
   const count = await query(
     `SELECT COUNT(*) AS total FROM audit_logs a ${where}`,
-    params.slice(0, 5)
+    [params[0], params[0], params[1], params[1], params[2], params[2], params[3], params[3], params[4], params[4]]
   );
 
   return { data: rows.recordset, meta: buildMeta(count.recordset[0].total, page, limit) };

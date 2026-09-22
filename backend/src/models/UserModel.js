@@ -1,5 +1,5 @@
 'use strict';
-const { query } = require('../config/database');
+const { query, getLastInsertId } = require('../config/database');
 const { parsePagination, buildMeta, safeSort } = require('../utils/pagination');
 
 /** Columnas publicas: nunca se expone password_hash. */
@@ -13,7 +13,7 @@ async function findById(id) {
   const result = await query(
     `SELECT ${PUBLIC_FIELDS}
      FROM users u INNER JOIN roles r ON r.id = u.role_id
-     WHERE u.id = $1`,
+     WHERE u.id = ?`,
     [id]
   );
   return result.recordset[0] || null;
@@ -26,7 +26,7 @@ async function findByUsernameWithSecret(username) {
             r.name AS role_name, u.is_active, u.must_change_password,
             u.failed_login_attempts, u.locked_until
      FROM users u INNER JOIN roles r ON r.id = u.role_id
-     WHERE u.username = $1`,
+     WHERE u.username = ?`,
     [username]
   );
   return result.recordset[0] || null;
@@ -34,7 +34,7 @@ async function findByUsernameWithSecret(username) {
 
 async function findPasswordHash(id) {
   const result = await query(
-    `SELECT password_hash FROM users WHERE id = $1`,
+    `SELECT password_hash FROM users WHERE id = ?`,
     [id]
   );
   return result.recordset[0]?.password_hash || null;
@@ -43,10 +43,10 @@ async function findPasswordHash(id) {
 async function existsByUsernameOrEmail(username, email, excludeId = null) {
   const result = await query(
     `SELECT id FROM users
-     WHERE (username = $1 OR email = $2)
-       AND ($3 IS NULL OR id <> $3)
+     WHERE (username = ? OR email = ?)
+       AND (? IS NULL OR id <> ?)
      LIMIT 1`,
-    [username, email, excludeId]
+    [username, email, excludeId, excludeId]
   );
   return result.recordset.length > 0;
 }
@@ -62,47 +62,47 @@ async function list(queryParams) {
   const params = [search, roleId, isActive, offset, limit];
 
   const where = `
-    WHERE ($1 IS NULL OR u.username LIKE $1 OR u.full_name LIKE $1 OR u.email LIKE $1)
-      AND ($2 IS NULL OR u.role_id = $2)
-      AND ($3 IS NULL OR u.is_active = $3)`;
+    WHERE (? IS NULL OR u.username LIKE ? OR u.full_name LIKE ? OR u.email LIKE ?)
+      AND (? IS NULL OR u.role_id = ?)
+      AND (? IS NULL OR u.is_active = ?)`;
 
   const rows = await query(
     `SELECT ${PUBLIC_FIELDS}
      FROM users u INNER JOIN roles r ON r.id = u.role_id
      ${where}
      ORDER BY u.${column} ${direction}
-     LIMIT $5 OFFSET $4`,
-    params
+     LIMIT ? OFFSET ?`,
+    [search, search, search, search, roleId, roleId, isActive, isActive, limit, offset]
   );
 
   const count = await query(
     `SELECT COUNT(*) AS total
      FROM users u INNER JOIN roles r ON r.id = u.role_id ${where}`,
-    [search, roleId, isActive]
+    [search, search, search, search, roleId, roleId, isActive, isActive]
   );
 
   return { data: rows.recordset, meta: buildMeta(count.recordset[0].total, page, limit) };
 }
 
 async function create({ username, email, fullName, passwordHash, roleId, mustChangePassword = true }) {
-  const result = await query(
+  await query(
     `INSERT INTO users (username, email, full_name, password_hash, role_id, must_change_password)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id`,
+     VALUES (?, ?, ?, ?, ?, ?)`,
     [username, email, fullName, passwordHash, roleId, mustChangePassword]
   );
-  return findById(result.recordset[0].id);
+  const id = getLastInsertId();
+  return findById(id);
 }
 
 async function update(id, { email, fullName, roleId, isActive }) {
   await query(
     `UPDATE users
-     SET email      = COALESCE($2, email),
-         full_name  = COALESCE($3, full_name),
-         role_id    = COALESCE($4, role_id),
-         is_active  = COALESCE($5, is_active)
-     WHERE id = $1`,
-    [id, email, fullName, roleId, isActive]
+     SET email      = COALESCE(?, email),
+         full_name  = COALESCE(?, full_name),
+         role_id    = COALESCE(?, role_id),
+         is_active  = COALESCE(?, is_active)
+     WHERE id = ?`,
+    [email, fullName, roleId, isActive, id]
   );
   return findById(id);
 }
@@ -110,19 +110,19 @@ async function update(id, { email, fullName, roleId, isActive }) {
 async function setPassword(id, passwordHash, { mustChange = false } = {}) {
   await query(
     `UPDATE users
-     SET password_hash = $2,
-         must_change_password = $3,
+     SET password_hash = ?,
+         must_change_password = ?,
          failed_login_attempts = 0,
          locked_until = NULL
-     WHERE id = $1`,
-    [id, passwordHash, mustChange]
+     WHERE id = ?`,
+    [passwordHash, mustChange, id]
   );
 }
 
 async function setActive(id, isActive) {
   await query(
-    `UPDATE users SET is_active = $2 WHERE id = $1`,
-    [id, isActive]
+    `UPDATE users SET is_active = ? WHERE id = ?`,
+    [isActive, id]
   );
   return findById(id);
 }
@@ -130,31 +130,34 @@ async function setActive(id, isActive) {
 async function registerSuccessfulLogin(id) {
   await query(
     `UPDATE users
-     SET last_login = NOW(), failed_login_attempts = 0, locked_until = NULL
-     WHERE id = $1`,
+     SET last_login = datetime('now'), failed_login_attempts = 0, locked_until = NULL
+     WHERE id = ?`,
     [id]
   );
 }
 
 /** Incrementa el contador y bloquea la cuenta si se pasa del limite. */
 async function registerFailedLogin(id, maxAttempts, lockoutMinutes) {
-  const result = await query(
+  await query(
     `UPDATE users
      SET failed_login_attempts = failed_login_attempts + 1,
          locked_until = CASE
-             WHEN failed_login_attempts + 1 >= $2
-             THEN NOW() + INTERVAL '1 minute' * $3
+             WHEN failed_login_attempts + 1 >= ?
+             THEN datetime('now', '+' || ? || ' minutes')
              ELSE locked_until END
-     WHERE id = $1
-     RETURNING failed_login_attempts, locked_until`,
-    [id, maxAttempts, lockoutMinutes]
+     WHERE id = ?`,
+    [maxAttempts, lockoutMinutes, id]
+  );
+  const result = await query(
+    `SELECT failed_login_attempts, locked_until FROM users WHERE id = ?`,
+    [id]
   );
   return result.recordset[0];
 }
 
 async function unlock(id) {
   await query(
-    `UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1`,
+    `UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?`,
     [id]
   );
   return findById(id);
@@ -166,7 +169,7 @@ async function getAuthState(id) {
     `SELECT u.id, u.username, u.is_active, u.must_change_password,
             u.role_id, r.name AS role_name
      FROM users u INNER JOIN roles r ON r.id = u.role_id
-     WHERE u.id = $1`,
+     WHERE u.id = ?`,
     [id]
   );
   return result.recordset[0] || null;

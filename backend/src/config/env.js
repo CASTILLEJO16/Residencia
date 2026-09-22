@@ -40,20 +40,12 @@ module.exports = {
     .split(',').map((s) => s.trim()),
 
   db: {
-    server: required('DB_SERVER'),
-    port: num('DB_PORT', 5432),
-    database: required('DB_NAME'),
-    user: required('DB_USER'),
-    password: required('DB_PASSWORD'),
+    path: process.env.DB_PATH || null,
   },
 
-  // Conexion de solo lectura para el ejecutor de KPIs (Fase 2)
+  // SQLite no necesita conexión separada de solo lectura
   dbReadOnly: {
-    server: process.env.DB_RO_SERVER || null,
-    port: num('DB_RO_PORT', 5432),
-    database: process.env.DB_RO_NAME || null,
-    user: process.env.DB_RO_USER || null,
-    password: process.env.DB_RO_PASSWORD || null,
+    path: process.env.DB_PATH || null,
   },
 
   jwt: {

@@ -1,88 +1,105 @@
 'use strict';
-const { Pool: PgPool } = require('pg');
+const initSqlJs = require('sql.js');
+const fs = require('fs');
+const path = require('path');
 const config = require('./env');
 
-let pool = null;
-let readOnlyPool = null;
+let db = null;
+let SQL = null;
 
-function buildConfig(cfg) {
-  return {
-    host: cfg.server,
-    port: cfg.port,
-    database: cfg.database,
-    user: cfg.user,
-    password: cfg.password,
-    max: 10,
-    min: 0,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 30000,
-  };
-}
-
-/** Pool principal de la aplicacion (lectura/escritura sobre el esquema SIO). */
-async function getPool() {
-  if (pool) return pool;
-  pool = new PgPool(buildConfig(config.db));
-  pool.on('error', (err) => console.error('[db] error en el pool:', err.message));
-  return pool;
-}
-
-/**
- * Pool de SOLO LECTURA, exclusivo para el ejecutor de KPIs (Fase 2).
- * Usa credenciales distintas y con permisos minimos.
- */
-async function getReadOnlyPool() {
-  const cfg = config.dbReadOnly;
-  if (!cfg.server || !cfg.user) {
-    throw new Error('La conexion de solo lectura (DB_RO_*) no esta configurada');
+async function initDb() {
+  if (db) return db;
+  
+  SQL = await initSqlJs();
+  const dbPath = config.db.path || path.join(__dirname, '../../data/sio.db');
+  
+  if (fs.existsSync(dbPath)) {
+    const fileBuffer = fs.readFileSync(dbPath);
+    db = new SQL.Database(fileBuffer);
+  } else {
+    db = new SQL.Database();
+    // Crear directorio si no existe
+    const dir = path.dirname(dbPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
   }
-  if (readOnlyPool) return readOnlyPool;
-  readOnlyPool = new PgPool({
-    ...buildConfig(cfg),
-    max: 4,
-    min: 0,
-  });
-  readOnlyPool.on('error', (err) => console.error('[db-ro] error:', err.message));
-  return readOnlyPool;
+  
+  db.run('PRAGMA foreign_keys = ON');
+  console.log(`[db] SQLite conectado: ${dbPath}`);
+  return db;
+}
+
+function getDb() {
+  return db;
+}
+
+function saveDb() {
+  if (!db) return;
+  const dbPath = config.db.path || path.join(__dirname, '../../data/sio.db');
+  const data = db.export();
+  const buffer = Buffer.from(data);
+  fs.writeFileSync(dbPath, buffer);
+}
+
+function getLastInsertId() {
+  if (!db) return null;
+  const result = db.exec('SELECT last_insert_rowid() AS id');
+  if (result.length > 0 && result[0].values.length > 0) {
+    return result[0].values[0][0];
+  }
+  return null;
 }
 
 /**
  * Ejecuta una consulta parametrizada.
- * @param {string} text  SQL con parametros posicionales ($1, $2, ...)
+ * @param {string} text  SQL con parametros posicionales (?, ?, ...)
  * @param {Array<any>} params  Array de valores para los parametros
  */
 async function query(text, params = []) {
-  const p = await getPool();
-  const result = await p.query(text, params);
+  const database = await initDb();
+  const stmt = database.prepare(text);
+  stmt.bind(params);
+  const result = [];
+  while (stmt.step()) {
+    result.push(stmt.getAsObject());
+  }
+  stmt.free();
+  
+  // Guardar si fue una operación de escritura (INSERT, UPDATE, DELETE)
+  const upperText = text.trim().toUpperCase();
+  if (upperText.startsWith('INSERT') || upperText.startsWith('UPDATE') || upperText.startsWith('DELETE')) {
+    saveDb();
+  }
+  
   return {
-    recordset: result.rows,
-    rowsAffected: result.rowCount,
+    recordset: result,
+    rowsAffected: database.getRowsModified(),
     output: {},
   };
 }
 
 /** Ejecuta varias operaciones dentro de una transaccion. */
 async function withTransaction(callback) {
-  const p = await getPool();
-  const client = await p.connect();
+  const database = await initDb();
+  database.run('BEGIN');
   try {
-    await client.query('BEGIN');
-    const result = await callback(client);
-    await client.query('COMMIT');
+    const result = await callback(database);
+    database.run('COMMIT');
+    saveDb();
     return result;
   } catch (err) {
-    try { await client.query('ROLLBACK'); } catch (_) { /* ya revertida */ }
+    database.run('ROLLBACK');
     throw err;
-  } finally {
-    client.release();
   }
 }
 
 async function closeAll() {
-  if (pool) await pool.end().catch(() => {});
-  if (readOnlyPool) await readOnlyPool.end().catch(() => {});
-  pool = null;
-  readOnlyPool = null;
+  if (db) {
+    saveDb();
+    db.close();
+    db = null;
+  }
 }
 
-module.exports = { pg: require('pg'), getPool, getReadOnlyPool, query, withTransaction, closeAll };
+module.exports = { initDb, getDb, query, withTransaction, closeAll, getLastInsertId };

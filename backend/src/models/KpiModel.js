@@ -1,5 +1,5 @@
 'use strict';
-const { query } = require('../config/database');
+const { query, getLastInsertId } = require('../config/database');
 const { parsePagination, buildMeta, safeSort } = require('../utils/pagination');
 
 const FIELDS = `
@@ -14,7 +14,7 @@ async function findById(id) {
   const result = await query(
     `SELECT ${FIELDS} FROM kpis k
      LEFT JOIN users u ON u.id = k.created_by
-     WHERE k.id = $1`,
+     WHERE k.id = ?`,
     [id]
   );
   return result.recordset[0] || null;
@@ -41,50 +41,52 @@ async function list(params) {
     limit,
   ];
   const where = `
-    WHERE ($1 IS NULL OR k.name LIKE $1 OR k.description LIKE $1)
-      AND ($2 IS NULL OR k.widget_type = $2)
-      AND ($3 IS NULL OR k.is_active = $3)`;
+    WHERE (? IS NULL OR k.name LIKE ? OR k.description LIKE ?)
+      AND (? IS NULL OR k.widget_type = ?)
+      AND (? IS NULL OR k.is_active = ?)`;
 
   const rows = await query(
     `SELECT ${FIELDS} FROM kpis k
      LEFT JOIN users u ON u.id = k.created_by
      ${where} ORDER BY k.${column} ${direction}
-     LIMIT $5 OFFSET $4`, args);
+     LIMIT ? OFFSET ?`,
+    [args[0], args[0], args[0], args[1], args[1], args[2], args[2], args[3], args[4]]);
 
   const count = await query(
-    `SELECT COUNT(*) AS total FROM kpis k ${where}`, args.slice(0, 3));
+    `SELECT COUNT(*) AS total FROM kpis k ${where}`,
+    [args[0], args[0], args[0], args[1], args[1], args[2], args[2]]);
 
   return { data: rows.recordset, meta: buildMeta(count.recordset[0].total, page, limit) };
 }
 
 async function create(data, userId) {
-  const result = await query(
+  await query(
     `INSERT INTO kpis
        (name, description, sql_query, data_source, refresh_interval, max_rows,
         timeout_seconds, widget_type, value_column, label_column, is_active, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     RETURNING id`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [data.name, data.description ?? null, data.sqlQuery, data.dataSource ?? null, data.refreshInterval ?? 300, data.maxRows ?? 1000, data.timeoutSeconds ?? 15, data.widgetType, data.valueColumn ?? null, data.labelColumn ?? null, data.isActive ?? true, userId]
   );
-  return findById(result.recordset[0].id);
+  const id = getLastInsertId();
+  return findById(id);
 }
 
 async function update(id, data) {
   await query(
     `UPDATE kpis SET
-       name             = COALESCE($2, name),
-       description      = COALESCE($3, description),
-       sql_query        = COALESCE($4, sql_query),
-       data_source      = COALESCE($5, data_source),
-       refresh_interval = COALESCE($6, refresh_interval),
-       max_rows         = COALESCE($7, max_rows),
-       timeout_seconds  = COALESCE($8, timeout_seconds),
-       widget_type      = COALESCE($9, widget_type),
-       value_column     = COALESCE($10, value_column),
-       label_column     = COALESCE($11, label_column),
-       is_active        = COALESCE($12, is_active)
-     WHERE id = $1`,
-    [id, data.name ?? null, data.description ?? null, data.sqlQuery ?? null, data.dataSource ?? null, data.refreshInterval ?? null, data.maxRows ?? null, data.timeoutSeconds ?? null, data.widgetType ?? null, data.valueColumn ?? null, data.labelColumn ?? null, data.isActive ?? null]
+       name             = COALESCE(?, name),
+       description      = COALESCE(?, description),
+       sql_query        = COALESCE(?, sql_query),
+       data_source      = COALESCE(?, data_source),
+       refresh_interval = COALESCE(?, refresh_interval),
+       max_rows         = COALESCE(?, max_rows),
+       timeout_seconds  = COALESCE(?, timeout_seconds),
+       widget_type      = COALESCE(?, widget_type),
+       value_column     = COALESCE(?, value_column),
+       label_column     = COALESCE(?, label_column),
+       is_active        = COALESCE(?, is_active)
+     WHERE id = ?`,
+    [data.name ?? null, data.description ?? null, data.sqlQuery ?? null, data.dataSource ?? null, data.refreshInterval ?? null, data.maxRows ?? null, data.timeoutSeconds ?? null, data.widgetType ?? null, data.valueColumn ?? null, data.labelColumn ?? null, data.isActive ?? null, id]
   );
   return findById(id);
 }
@@ -93,17 +95,17 @@ async function update(id, data) {
 async function countDependencies(id) {
   const result = await query(
     `SELECT
-       (SELECT COUNT(*) FROM thresholds WHERE kpi_id = $1) AS thresholds,
-       (SELECT COUNT(*) FROM alerts     WHERE kpi_id = $1) AS alerts`,
+       (SELECT COUNT(*) FROM thresholds WHERE kpi_id = ?) AS thresholds,
+       (SELECT COUNT(*) FROM alerts     WHERE kpi_id = ?) AS alerts`,
     [id]
   );
   return result.recordset[0];
 }
 
 async function remove(id) {
-  await query(`DELETE FROM kpi_history   WHERE kpi_id = $1`, [id]);
-  await query(`DELETE FROM kpi_snapshots WHERE kpi_id = $1`, [id]);
-  const result = await query(`DELETE FROM kpis WHERE id = $1`, [id]);
+  await query(`DELETE FROM kpi_history   WHERE kpi_id = ?`, [id]);
+  await query(`DELETE FROM kpi_snapshots WHERE kpi_id = ?`, [id]);
+  const result = await query(`DELETE FROM kpis WHERE id = ?`, [id]);
   return result.rowsAffected > 0;
 }
 
@@ -111,7 +113,7 @@ async function remove(id) {
 
 async function saveScalar(kpiId, value) {
   await query(
-    `INSERT INTO kpi_history (kpi_id, value) VALUES ($1, $2)`,
+    `INSERT INTO kpi_history (kpi_id, value) VALUES (?, ?)`,
     [kpiId, value]
   );
 }
@@ -119,7 +121,7 @@ async function saveScalar(kpiId, value) {
 async function saveSnapshot(kpiId, payload, rowCount, durationMs) {
   await query(
     `INSERT INTO kpi_snapshots (kpi_id, payload, row_count, duration_ms)
-     VALUES ($1, $2, $3, $4)`,
+     VALUES (?, ?, ?, ?)`,
     [kpiId, JSON.stringify(payload), rowCount, durationMs]
   );
 }
@@ -129,8 +131,8 @@ async function latestSnapshot(kpiId, maxAgeSeconds) {
   const result = await query(
     `SELECT payload, row_count, duration_ms, captured_at
      FROM kpi_snapshots
-     WHERE kpi_id = $1
-       AND captured_at > NOW() - INTERVAL '1 second' * $2
+     WHERE kpi_id = ?
+       AND captured_at > datetime('now', '-' || ? || ' seconds')
      ORDER BY captured_at DESC
      LIMIT 1`,
     [kpiId, maxAgeSeconds]
@@ -150,12 +152,12 @@ async function history(kpiId, { from, to, limit = 500 }) {
   const result = await query(
     `SELECT recorded_at, value
      FROM kpi_history
-     WHERE kpi_id = $1
-       AND ($2 IS NULL OR recorded_at >= $2)
-       AND ($3 IS NULL OR recorded_at <= $3)
+     WHERE kpi_id = ?
+       AND (? IS NULL OR recorded_at >= ?)
+       AND (? IS NULL OR recorded_at <= ?)
      ORDER BY recorded_at DESC
-     LIMIT $4`,
-    [kpiId, from ? new Date(from) : null, to ? new Date(to) : null, Math.min(Number(limit) || 500, 5000)]
+     LIMIT ?`,
+    [kpiId, from ? new Date(from) : null, from ? new Date(from) : null, to ? new Date(to) : null, to ? new Date(to) : null, Math.min(Number(limit) || 500, 5000)]
   );
   return result.recordset.reverse();
 }
