@@ -5,9 +5,9 @@ const { parsePagination, buildMeta, safeSort } = require('../utils/pagination');
 /** Columnas publicas: nunca se expone password_hash. */
 const PUBLIC_FIELDS = `
   u.id, u.username, u.email, u.full_name, u.role_id, r.name AS role_name,
-  u.is_active, u.must_change_password, u.last_login, u.created_at, u.updated_at`;
+  u.is_active, u.must_change_password, u.last_login_at AS last_login, u.created_at, u.updated_at`;
 
-const SORTABLE = ['username', 'email', 'full_name', 'created_at', 'last_login'];
+const SORTABLE = ['username', 'email', 'full_name', 'created_at', 'last_login', 'last_login_at'];
 
 async function findById(id) {
   const result = await query(
@@ -53,7 +53,9 @@ async function existsByUsernameOrEmail(username, email, excludeId = null) {
 
 async function list(queryParams) {
   const { page, limit, offset } = parsePagination(queryParams);
-  const { column, direction } = safeSort(queryParams.sort, SORTABLE, 'created_at');
+  let { column, direction } = safeSort(queryParams.sort, SORTABLE, 'created_at');
+  // Compatibilidad: la columna física es last_login_at pero la API expone last_login
+  if (column === 'last_login') column = 'last_login_at';
   const search = queryParams.search ? `%${queryParams.search}%` : null;
   const roleId = queryParams.roleId ? parseInt(queryParams.roleId, 10) : null;
   const isActive = queryParams.isActive === undefined || queryParams.isActive === ''
@@ -130,8 +132,8 @@ async function setActive(id, isActive) {
 async function registerSuccessfulLogin(id) {
   await query(
     `UPDATE users
-     SET last_login = datetime('now'), failed_login_attempts = 0, locked_until = NULL
-     WHERE id = ?`,
+      SET last_login_at = datetime('now'), failed_login_attempts = 0, locked_until = NULL
+      WHERE id = ?`,
     [id]
   );
 }

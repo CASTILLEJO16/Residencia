@@ -59,7 +59,12 @@ function getLastInsertId() {
 async function query(text, params = []) {
   const database = await initDb();
   const stmt = database.prepare(text);
-  stmt.bind(params);
+  // sql.js no sabe bindear Date, se normaliza a string SQLite YYYY-MM-DD HH:MM:SS
+  const normalized = params.map((v) => {
+    if (v instanceof Date) return v.toISOString().slice(0, 19).replace('T', ' ');
+    return v;
+  });
+  stmt.bind(normalized);
   const result = [];
   while (stmt.step()) {
     result.push(stmt.getAsObject());

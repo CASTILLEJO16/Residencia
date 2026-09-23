@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
   full_name TEXT NOT NULL,
   role_id INTEGER REFERENCES roles(id),
   is_active INTEGER DEFAULT 1,
+  must_change_password INTEGER DEFAULT 0,
   failed_login_attempts INTEGER DEFAULT 0,
   locked_until TEXT,
   last_login_at TEXT,
