@@ -9,15 +9,15 @@ export default function Table({
 }) {
   if (loading) {
     return (
-      <div className="flex items-center justify-center gap-2 py-12 text-ink-2">
-        <Loader2 size={16} className="animate-spin" />
+      <div className="flex items-center justify-center gap-2 py-12 text-ink-2" role="status" aria-live="polite">
+        <Loader2 size={16} className="animate-spin" aria-hidden="true" />
         <span className="text-sm">Cargando</span>
       </div>
     );
   }
 
   if (!rows?.length) {
-    return <div className="px-4 py-12 text-center text-sm text-ink-2">{empty}</div>;
+    return <div className="px-4 py-12 text-center text-sm text-ink-2" role="status">{empty}</div>;
   }
 
   return (

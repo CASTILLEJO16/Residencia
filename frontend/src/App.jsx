@@ -27,7 +27,7 @@ export default function App() {
             } />
 
             <Route element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
-              <Route index element={<Navigate to="/dashboard" replace />} />
+              <Route index element={<Navigate to="/incidentes" replace />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/inteligencia" element={
                 <ProtectedRoute roles={[ROLES.ADMIN, ROLES.ANALISTA]}><Intelligence /></ProtectedRoute>

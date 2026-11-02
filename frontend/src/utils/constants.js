@@ -5,6 +5,28 @@ export const ROLES = {
   AUDITORIA: 'SIO_Auditoria',
 };
 
+// Alias para DB local (admin, analista, operador, viewer, manager)
+export const ROLE_ALIASES = {
+  [ROLES.ADMIN]: [ROLES.ADMIN, 'admin'],
+  [ROLES.ANALISTA]: [ROLES.ANALISTA, 'analista', 'operador', 'manager'],
+  [ROLES.CONSULTA]: [ROLES.CONSULTA, 'viewer'],
+  [ROLES.AUDITORIA]: [ROLES.AUDITORIA, 'auditoria'],
+};
+
+export function normalizeRole(role) {
+  if (!role) return role;
+  for (const [canonical, aliases] of Object.entries(ROLE_ALIASES)) {
+    if (aliases.includes(role)) return canonical;
+  }
+  return role;
+}
+
+export function hasRoleAny(userRole, allowed) {
+  const norm = normalizeRole(userRole);
+  const allowedNorm = allowed.flat().map(normalizeRole);
+  return allowedNorm.includes(norm);
+}
+
 export const SEVERITY = {
   low:      { label: 'Baja',    color: 'sev-low',      hex: '#3E7CB1', order: 3 },
   medium:   { label: 'Media',   color: 'sev-medium',   hex: '#B07D2B', order: 2 },

@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS roles (
   name TEXT NOT NULL UNIQUE,
   description TEXT,
   is_system INTEGER DEFAULT 0,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Tabla de usuarios
@@ -133,6 +134,7 @@ CREATE TABLE IF NOT EXISTS alerts (
   threshold_id INTEGER REFERENCES thresholds(id) ON DELETE SET NULL,
   severity TEXT DEFAULT 'medium',
   current_value REAL,
+  message TEXT,
   triggered_at TEXT DEFAULT CURRENT_TIMESTAMP,
   status TEXT DEFAULT 'open',
   occurrence_count INTEGER DEFAULT 1,
@@ -208,6 +210,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
 
--- Insertar rol de administrador por defecto
+-- Insertar roles por defecto
 INSERT OR IGNORE INTO roles (id, name, description, is_system) 
-VALUES (1, 'admin', 'Administrador del sistema', 1);
+VALUES 
+  (1, 'SIO_Admin', 'Administrador del sistema', 1),
+  (2, 'SIO_Analistas', 'Analista de datos', 1),
+  (3, 'SIO_Consulta', 'Usuario solo lectura', 1),
+  (4, 'SIO_Auditoria', 'Auditor del sistema', 1);

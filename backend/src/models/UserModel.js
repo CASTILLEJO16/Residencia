@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 const { query, getLastInsertId } = require('../config/database');
 const { parsePagination, buildMeta, safeSort } = require('../utils/pagination');
 
@@ -54,7 +54,7 @@ async function existsByUsernameOrEmail(username, email, excludeId = null) {
 async function list(queryParams) {
   const { page, limit, offset } = parsePagination(queryParams);
   let { column, direction } = safeSort(queryParams.sort, SORTABLE, 'created_at');
-  // Compatibilidad: la columna física es last_login_at pero la API expone last_login
+  // Compatibilidad: la columna fÃ­sica es last_login_at pero la API expone last_login
   if (column === 'last_login') column = 'last_login_at';
   const search = queryParams.search ? `%${queryParams.search}%` : null;
   const roleId = queryParams.roleId ? parseInt(queryParams.roleId, 10) : null;
@@ -177,8 +177,32 @@ async function getAuthState(id) {
   return result.recordset[0] || null;
 }
 
+async function findByUsername(username) {
+  const result = await query(
+    `SELECT u.*, r.name AS role_name
+     FROM users u
+     INNER JOIN roles r ON r.id = u.role_id
+     WHERE LOWER(u.username) = LOWER(?)`,
+    [username]
+  );
+  return result.recordset[0] || null;
+}
+
+async function syncDirectoryUser(id, { email, fullName, roleId }) {
+  await query(
+    `UPDATE users
+     SET email = ?,
+         full_name = ?,
+         role_id = ?,
+         updated_at = datetime('now')
+     WHERE id = ?`,
+    [email, fullName, roleId, id]
+  );
+  return findById(id);
+}
 module.exports = {
-  findById, findByUsernameWithSecret, findPasswordHash, existsByUsernameOrEmail,
+  findById, findByUsername, findByUsernameWithSecret, findPasswordHash, existsByUsernameOrEmail,
   list, create, update, setPassword, setActive,
-  registerSuccessfulLogin, registerFailedLogin, unlock, getAuthState,
+  registerSuccessfulLogin, registerFailedLogin, unlock, getAuthState, syncDirectoryUser,
 };
+

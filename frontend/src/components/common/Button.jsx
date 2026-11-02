@@ -16,17 +16,20 @@ export default function Button({
   variant = 'secondary', size = 'md', loading = false, icon: Icon,
   children, className = '', disabled, ...props
 }) {
+  const hasText = children && children.toString().trim().length > 0;
   return (
     <button
       {...props}
       disabled={disabled || loading}
+      aria-busy={loading}
       className={`inline-flex items-center justify-center rounded-panel border font-medium
         transition-colors disabled:cursor-not-allowed disabled:opacity-50
+        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-steel focus-visible:ring-offset-2
         ${VARIANTS[variant]} ${SIZES[size]} ${className}`}
     >
       {loading
-        ? <Loader2 size={size === 'sm' ? 13 : 15} className="animate-spin" />
-        : Icon && <Icon size={size === 'sm' ? 13 : 15} />}
+        ? <Loader2 size={size === 'sm' ? 13 : 15} className="animate-spin" aria-hidden="true" />
+        : Icon && <Icon size={size === 'sm' ? 13 : 15} aria-hidden="true" />}
       {children}
     </button>
   );

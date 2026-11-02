@@ -32,7 +32,7 @@ export default function Intelligence() {
     <>
       <PageHeader
         title="Inteligencia"
-        description="Define qué se mide, cuándo se considera un problema y qué alertas se generaron."
+        description="Define indicadores y umbrales para detectar problemas automáticamente y generar tickets."
       />
       <div className="border-b border-rule bg-panel px-5">
         <div className="flex gap-1">

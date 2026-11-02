@@ -1,15 +1,15 @@
-# SIO — Sistema de Inteligencia Operativa
+# SIO — Sistema de Gestión de Tickets
 
-Dashboard de KPIs, alertas por umbrales y gestión de incidentes sobre SQL Server.
+Sistema de gestión de incidentes con monitoreo de KPIs, alertas automáticas y auditoría. El enfoque principal es la gestión de tickets, con KPIs como herramienta de soporte para detectar problemas automáticamente.
 
 ## Estado
 
 | Fase | Módulo | Estado |
 |------|--------|--------|
-| 1 | Autenticación y gestión de usuarios | Completa |
-| 2 | Dashboard de KPIs | Completa |
-| 3 | Inteligencia: umbrales, alertas y monitor | Completa |
-| 4 | Incidentes (tickets) | Completa |
+| 1 | Autenticación y gestión de usuarios (LDAP + local) | Completa |
+| 2 | Gestión de tickets (crear, asignar, escalar, cerrar) | Completa |
+| 3 | Inteligencia: KPIs, umbrales, alertas y monitor | Completa |
+| 4 | Dashboard de métricas de tickets | Completa |
 | 5 | Reportes con exportación a Excel, PDF y CSV | Completa |
 | 6 | Administración de usuarios y roles | Completa |
 | 7 | Auditoría | Completa |
@@ -18,30 +18,11 @@ Dashboard de KPIs, alertas por umbrales y gestión de incidentes sobre SQL Serve
 ## Requisitos
 
 - Node.js 18 o superior
-- SQL Server 2016 o superior
+- SQLite (incluido en el proyecto)
 
 ## Instalación
 
-### 1. Base de datos
-
-```sql
-CREATE DATABASE SIO;
-```
-
-```bash
-sqlcmd -S localhost -U sa -P '...' -d SIO -i database/01_schema.sql
-sqlcmd -S localhost -U sa -P '...' -d SIO -i database/02_triggers.sql
-sqlcmd -S localhost -U sa -P '...' -d SIO -i database/03_seed.sql
-sqlcmd -S localhost -U sa -P '...' -d SIO -i database/04_maintenance.sql
-```
-
-`05_readonly_user.sql` crea el usuario que ejecuta las consultas de los KPIs.
-Antes de correrlo hay que cambiar `[BD_ORIGEN]` por el nombre real de la base de
-datos de la que salen las cifras, y poner una contraseña. Sin este paso los KPIs
-no funcionan, porque el backend se niega a ejecutarlos con la conexión de la
-aplicación.
-
-### 2. Backend
+### 1. Backend
 
 ```bash
 cd backend
@@ -49,24 +30,28 @@ npm install
 cp .env.example .env
 ```
 
-Generar el secreto y pegarlo en `.env`:
+Generar el secreto JWT y pegarlo en `.env`:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 ```
 
-Crear el primer administrador y arrancar:
+Inicializar la base de datos SQLite:
 
 ```bash
-npm run seed:admin
-npm run dev
+node scripts/init-sqlite.js
+node scripts/seed-sqlite.js
+```
+
+Arrancar el servidor:
+
+```bash
+npm start
 ```
 
 La API queda en `http://localhost:4000`. Prueba: `GET /api/health`.
-El archivo `backend/api.http` tiene una colección de peticiones lista para
-VS Code REST Client o el cliente HTTP de IntelliJ.
 
-### 3. Frontend
+### 2. Frontend
 
 ```bash
 cd frontend
@@ -74,11 +59,35 @@ npm install
 npm run dev
 ```
 
-Queda en `http://localhost:5173`, con proxy de `/api` al backend, así que en
-desarrollo no hace falta configurar CORS.
+Queda en `http://localhost:5173`, con proxy de `/api` al backend.
 
-Para producción: `npm run build` genera `dist/`, que se sirve como archivos
-estáticos detrás de IIS, nginx o el mismo Express.
+Para producción: `npm run build` genera `dist/`, que se sirve como archivos estáticos.
+
+### 3. Credenciales de prueba
+
+| Usuario | Contraseña | Rol |
+|---------|-----------|-----|
+| admin | Password123! | SIO_Admin (Administrador) |
+| analista1 | Password123! | SIO_Analistas (Analista) |
+| consulta1 | Password123! | SIO_Consulta (Solo lectura) |
+| auditor1 | Password123! | SIO_Auditoria (Auditor) |
+
+## Configuración de LDAP (Producción)
+
+El sistema soporta autenticación LDAP/Active Directory con fallback automático a autenticación local cuando LDAP no está disponible (útil para desarrollo local).
+
+Configura estas variables en `.env`:
+
+```bash
+LDAP_URL=ldap://your-domain-controller.com
+LDAP_BASE_DN=DC=empresa,DC=com
+LDAP_DOMAIN=EMPRESA
+LDAP_CA_CERT=/path/to/cert.pem
+LDAP_BIND_USER=CN=sio-service,CN=Users,DC=empresa,DC=com
+LDAP_BIND_PASSWORD=your-bind-password
+```
+
+Si LDAP no está configurado o falla, el sistema usa automáticamente la autenticación local con los usuarios en SQLite.
 
 ## Endpoints
 

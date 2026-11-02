@@ -1,7 +1,7 @@
 import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
 import { authApi } from '../services/endpoints';
 import { tokenStore, setSessionExpiredHandler } from '../services/api';
-import { ROLES } from '../utils/constants';
+import { ROLES, normalizeRole, hasRoleAny } from '../utils/constants';
 
 export const AuthContext = createContext(null);
 
@@ -64,9 +64,9 @@ export function AuthProvider({ children }) {
     login,
     logout,
     changePassword,
-    isAdmin: user?.role === ROLES.ADMIN,
-    canEdit: user?.role === ROLES.ADMIN || user?.role === ROLES.ANALISTA,
-    hasRole: (...roles) => roles.flat().includes(user?.role),
+    isAdmin: normalizeRole(user?.role) === ROLES.ADMIN,
+    canEdit: hasRoleAny(user?.role, [ROLES.ADMIN, ROLES.ANALISTA]),
+    hasRole: (...roles) => hasRoleAny(user?.role, roles.flat()),
   }), [user, loading, sessionMessage, login, logout, changePassword]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

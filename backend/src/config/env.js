@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 require('dotenv').config();
 
 /**
@@ -32,7 +32,23 @@ if (jwtSecret.length < 32) {
   throw new Error('JWT_SECRET debe tener al menos 32 caracteres');
 }
 
+const ldap = {
+  url: process.env.LDAP_URL || 'ldaps://dc01.lab.local:636',
+  baseDN: process.env.LDAP_BASE_DN || 'DC=lab,DC=local',
+  domain: process.env.LDAP_DOMAIN || 'lab.local',
+  caCertFile: process.env.LDAP_CA_CERT || null,
+  bindUser: process.env.LDAP_BIND_USER || null,
+  bindPassword: process.env.LDAP_BIND_PASSWORD || null,
+  timeoutMs: num('LDAP_TIMEOUT_MS', 5000),
+  groups: {
+    SIO_Admin: process.env.AD_GROUP_ADMIN || 'SIO_Admin',
+    SIO_Analistas: process.env.AD_GROUP_ANALISTAS || 'SIO_Analistas',
+    SIO_Consulta: process.env.AD_GROUP_CONSULTA || 'SIO_Consulta',
+    SIO_Auditoria: process.env.AD_GROUP_AUDITORIA || 'SIO_Auditoria',
+  },
+};
 module.exports = {
+  ldap,
   env: process.env.NODE_ENV || 'development',
   isProd: process.env.NODE_ENV === 'production',
   port: num('PORT', 4000),
@@ -43,7 +59,7 @@ module.exports = {
     path: process.env.DB_PATH || null,
   },
 
-  // SQLite no necesita conexión separada de solo lectura
+  // SQLite no necesita conexiÃ³n separada de solo lectura
   dbReadOnly: {
     path: process.env.DB_PATH || null,
   },
@@ -79,3 +95,5 @@ module.exports = {
     passwordMinLength: 10,
   },
 };
+
+

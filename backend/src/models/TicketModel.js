@@ -31,25 +31,38 @@ async function findById(id) {
 async function list(params) {
   const { page, limit, offset } = parsePagination(params);
   const { column, direction } = safeSort(params.sort, SORTABLE, 'created_at');
-  const args = [
-    params.status || null,
-    params.priority || null,
-    params.assignedTo ? Number(params.assignedTo) : null,
-    params.createdBy ? Number(params.createdBy) : null,
-    params.search ? `%${params.search}%` : null,
-    params.unassigned === 'true' ? true : null,
-    params.overdue === 'true' ? true : null,
-    offset,
-    limit,
-  ];
-  const where = `
-    WHERE (? IS NULL OR t.status = ?)
-      AND (? IS NULL OR t.priority = ?)
-      AND (? IS NULL OR t.assigned_to = ?)
-      AND (? IS NULL OR t.created_by = ?)
-      AND (? IS NULL OR t.title LIKE ? OR t.description LIKE ?)
-      AND (? IS NULL OR t.assigned_to IS NULL)
-      AND (? IS NULL OR (t.due_date < datetime('now') AND t.status <> 'closed'))`;
+  
+  let where = '';
+  let whereArgs = [];
+  
+  if (params.status) {
+    where += ' AND t.status = ?';
+    whereArgs.push(params.status);
+  }
+  if (params.priority) {
+    where += ' AND t.priority = ?';
+    whereArgs.push(params.priority);
+  }
+  if (params.assignedTo) {
+    where += ' AND t.assigned_to = ?';
+    whereArgs.push(Number(params.assignedTo));
+  }
+  if (params.createdBy) {
+    where += ' AND t.created_by = ?';
+    whereArgs.push(Number(params.createdBy));
+  }
+  if (params.search) {
+    where += ' AND (t.title LIKE ? OR t.description LIKE ?)';
+    whereArgs.push(`%${params.search}%`, `%${params.search}%`);
+  }
+  if (params.unassigned === 'true') {
+    where += ' AND t.assigned_to IS NULL';
+  }
+  if (params.overdue === 'true') {
+    where += " AND t.due_date < datetime('now') AND t.status <> 'closed'";
+  }
+  
+  where = where.replace(/^ AND/, ' WHERE');
 
   const rows = await query(
     `SELECT ${FIELDS} ${JOINS} ${where}
@@ -57,19 +70,19 @@ async function list(params) {
        ? `CASE t.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END`
        : `t.${column}`} ${direction}
      LIMIT ? OFFSET ?`,
-    [args[0], args[0], args[1], args[1], args[2], args[2], args[3], args[3], args[4], args[4], args[4], args[5], args[5], args[6], args[7]]);
+    [...whereArgs, limit, offset]);
 
-  const count = await query(`SELECT COUNT(*) AS total ${JOINS} ${where}`,
-    [args[0], args[0], args[1], args[1], args[2], args[2], args[3], args[3], args[4], args[4], args[4], args[5], args[5]]);
+  const count = await query(`SELECT COUNT(*) AS total ${JOINS} ${where}`, whereArgs);
   return { data: rows.recordset, meta: buildMeta(count.recordset[0].total, page, limit) };
 }
 
 async function create(data, userId) {
-  await query(
+  const result = await query(
     `INSERT INTO tickets (title, description, alert_id, priority, assigned_to, due_date, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     RETURNING id`,
     [data.title, data.description ?? null, data.alertId ?? null, data.priority, data.assignedTo ?? null, data.dueDate ? new Date(data.dueDate) : null, userId]);
-  const id = getLastInsertId();
+  const id = result.recordset[0].id;
   return findById(id);
 }
 

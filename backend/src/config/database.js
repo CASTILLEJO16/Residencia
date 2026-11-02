@@ -44,11 +44,11 @@ function saveDb() {
 
 function getLastInsertId() {
   if (!db) return null;
-  const result = db.exec('SELECT last_insert_rowid() AS id');
-  if (result.length > 0 && result[0].values.length > 0) {
-    return result[0].values[0][0];
-  }
-  return null;
+  const stmt = db.prepare('SELECT last_insert_rowid() AS id');
+  stmt.step();
+  const result = stmt.getAsObject();
+  stmt.free();
+  return result.id;
 }
 
 /**

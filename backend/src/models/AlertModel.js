@@ -30,30 +30,42 @@ async function findOpenByThreshold(thresholdId) {
 
 async function list(params) {
   const { page, limit, offset } = parsePagination(params);
-  const args = [
-    params.status || null,
-    params.severity || null,
-    params.kpiId ? Number(params.kpiId) : null,
-    params.from ? new Date(params.from) : null,
-    params.to ? new Date(params.to) : null,
-    offset,
-    limit,
-  ];
-  const where = `
-    WHERE (? IS NULL OR a.status = ?)
-      AND (? IS NULL OR a.severity = ?)
-      AND (? IS NULL OR a.kpi_id = ?)
-      AND (? IS NULL OR a.triggered_at >= ?)
-      AND (? IS NULL OR a.triggered_at <= ?)`;
+  
+  let where = '';
+  let whereArgs = [];
+  
+  if (params.status) {
+    where += ' AND a.status = ?';
+    whereArgs.push(params.status);
+  }
+  if (params.severity) {
+    where += ' AND a.severity = ?';
+    whereArgs.push(params.severity);
+  }
+  if (params.kpiId) {
+    where += ' AND a.kpi_id = ?';
+    whereArgs.push(Number(params.kpiId));
+  }
+  if (params.from) {
+    where += ' AND a.triggered_at >= ?';
+    whereArgs.push(new Date(params.from));
+  }
+  if (params.to) {
+    where += ' AND a.triggered_at <= ?';
+    whereArgs.push(new Date(params.to));
+  }
+  
+  where = where.replace(/^ AND/, ' WHERE');
 
   const rows = await query(
     `SELECT ${FIELDS} ${JOINS} ${where}
      ORDER BY CASE a.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1
                               WHEN 'medium' THEN 2 ELSE 3 END,
               a.triggered_at DESC
-     LIMIT ? OFFSET ?`, args);
+     LIMIT ? OFFSET ?`,
+    [...whereArgs, limit, offset]);
 
-  const count = await query(`SELECT COUNT(*) AS total ${JOINS} ${where}`, args.slice(0, 5));
+  const count = await query(`SELECT COUNT(*) AS total ${JOINS} ${where}`, whereArgs);
   return { data: rows.recordset, meta: buildMeta(count.recordset[0].total, page, limit) };
 }
 

@@ -1,7 +1,8 @@
 import { forwardRef } from 'react';
 
 const base = `w-full rounded-panel border bg-panel px-2.5 text-sm text-ink
-  placeholder:text-ink-3 disabled:bg-paper disabled:text-ink-2`;
+  placeholder:text-ink-3 disabled:bg-paper disabled:text-ink-2
+  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-steel focus-visible:ring-offset-2`;
 
 export const Input = forwardRef(function Input({ invalid, className = '', ...props }, ref) {
   return (

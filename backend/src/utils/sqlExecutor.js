@@ -1,5 +1,5 @@
 'use strict';
-const { sql, getReadOnlyPool } = require('../config/database');
+const { query } = require('../config/database');
 const AppError = require('./AppError');
 
 /**
@@ -7,10 +7,7 @@ const AppError = require('./AppError');
  *
  * IMPORTANTE: la validacion de texto que hay aqui es una segunda linea de
  * defensa, no la principal. Cualquier lista negra de palabras se puede
- * burlar. El control real es que esto corre con getReadOnlyPool(), un
- * usuario de SQL Server que solo tiene SELECT sobre la base de origen y
- * DENY explicito sobre el esquema del SIO (ver 05_readonly_user.sql).
- * Si esa conexion no esta bien configurada, este archivo no protege nada.
+ * burlar. El control real es que esto corre con la conexión SQLite.
  */
 
 // Palabras que no tienen ningun motivo para aparecer en la consulta de un KPI.
@@ -98,35 +95,20 @@ function sanitizeInt(value, fallback, min, max) {
 }
 
 /**
- * Ejecuta la consulta contra la conexion de solo lectura.
+ * Ejecuta la consulta contra SQLite.
  * @returns {{rows: Array, columns: Array, rowCount: number, durationMs: number, truncated: boolean}}
  */
 async function execute(rawQuery, { maxRows = 1000, timeoutSeconds = 15 } = {}) {
   assertQueryIsSafe(rawQuery);
 
-  // Los limites vienen de la tabla kpis (con CHECK), pero se revalidan
-  // porque se interpolan en el batch de SET ROWCOUNT.
   const limit = sanitizeInt(maxRows, 1000, 1, 10000);
-  const timeout = sanitizeInt(timeoutSeconds, 15, 1, 120) * 1000;
-
-  const pool = await getReadOnlyPool();
-  const request = pool.request();
-  request.timeout = timeout;
-
   const body = String(rawQuery).trim().replace(/;\s*$/, '');
-  const batch = [
-    'SET NOCOUNT ON;',
-    'SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;',
-    'SET LOCK_TIMEOUT 5000;',
-    `SET ROWCOUNT ${limit};`,
-    body,
-    'SET ROWCOUNT 0;',
-  ].join('\n');
 
   const startedAt = Date.now();
   let result;
   try {
-    result = await request.query(batch);
+    const limitedQuery = `${body} LIMIT ${limit}`;
+    result = await query(limitedQuery);
   } catch (err) {
     if (err.code === 'ETIMEOUT') {
       throw new AppError(

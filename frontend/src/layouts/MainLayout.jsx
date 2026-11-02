@@ -9,12 +9,12 @@ import { ROLES } from '../utils/constants';
 import AlertBell from '../components/dashboard/AlertBell';
 
 const NAV = [
+  { to: '/incidentes',   label: 'Incidentes',   icon: LifeBuoy,
+    roles: [ROLES.ADMIN, ROLES.ANALISTA, ROLES.CONSULTA] },
   { to: '/dashboard',    label: 'Tablero',      icon: LayoutGrid,
     roles: [ROLES.ADMIN, ROLES.ANALISTA, ROLES.CONSULTA, ROLES.AUDITORIA] },
   { to: '/inteligencia', label: 'Inteligencia', icon: Brain,
     roles: [ROLES.ADMIN, ROLES.ANALISTA] },
-  { to: '/incidentes',   label: 'Incidentes',   icon: LifeBuoy,
-    roles: [ROLES.ADMIN, ROLES.ANALISTA, ROLES.CONSULTA] },
   { to: '/reportes',     label: 'Reportes',     icon: FileBarChart,
     roles: [ROLES.ADMIN, ROLES.ANALISTA, ROLES.CONSULTA, ROLES.AUDITORIA] },
   { to: '/administracion', label: 'Administración', icon: Settings2,
@@ -58,7 +58,7 @@ export default function MainLayout() {
               <span className="block h-1 w-1 bg-sev-critical" />
               <span className="block h-1 w-1 bg-sev-medium" />
             </span>
-            <span className="font-semibold leading-none">Inteligencia Operativa</span>
+            <span className="font-semibold leading-none">Gestión de Tickets</span>
           </div>
           <button
             className="text-ink-3 lg:hidden"
@@ -91,7 +91,7 @@ export default function MainLayout() {
             <UserRound size={16} className="shrink-0 text-ink-3" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13px] font-medium leading-tight">{user?.fullName}</p>
-              <p className="truncate text-micro text-ink-3">{user?.role?.replace('SIO_', '')}</p>
+              <p className="truncate text-micro text-ink-3">{(user?.role || '').replace('SIO_', '')}</p>
             </div>
           </div>
           <button
