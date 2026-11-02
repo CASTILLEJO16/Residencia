@@ -1,5 +1,5 @@
 'use strict';
-const { query, getLastInsertId } = require('../config/database');
+const { query } = require('../config/database');
 const { parsePagination, buildMeta } = require('../utils/pagination');
 
 const FIELDS = `
@@ -70,11 +70,11 @@ async function list(params) {
 }
 
 async function create({ thresholdId, kpiId, currentValue, message, severity }) {
-  await query(
+  const inserted = await query(
     `INSERT INTO alerts (threshold_id, kpi_id, current_value, message, severity)
      VALUES (?, ?, ?, ?, ?)`,
     [thresholdId, kpiId, currentValue, message, severity]);
-  const id = getLastInsertId();
+  const id = inserted.lastInsertId;
   return findById(id);
 }
 

@@ -1,3 +1,8 @@
 node_modules/
 .env
 *.log
+
+# Base de datos local (nunca se versiona: contiene usuarios y hashes)
+data/*.db
+data/*.db-wal
+data/*.db-shm

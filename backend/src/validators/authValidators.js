@@ -16,10 +16,6 @@ const loginSchema = z.object({
   password: z.string().min(1, 'La contrasena es obligatoria').max(128),
 });
 
-const refreshSchema = z.object({
-  refreshToken: z.string().length(96, 'Refresh token invalido'),
-});
-
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, 'La contrasena actual es obligatoria'),
   newPassword: passwordSchema,
@@ -28,4 +24,4 @@ const changePasswordSchema = z.object({
   path: ['newPassword'],
 });
 
-module.exports = { passwordSchema, loginSchema, refreshSchema, changePasswordSchema };
+module.exports = { passwordSchema, loginSchema, changePasswordSchema };

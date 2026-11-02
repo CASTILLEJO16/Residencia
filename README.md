@@ -17,8 +17,8 @@ Sistema de gestión de incidentes con monitoreo de KPIs, alertas automáticas y 
 
 ## Requisitos
 
-- Node.js 18 o superior
-- SQLite (incluido en el proyecto)
+- Node.js 20 o superior
+- SQLite (incluido: se usa `better-sqlite3`, no hace falta instalar nada aparte)
 
 ## Instalación
 
@@ -30,26 +30,38 @@ npm install
 cp .env.example .env
 ```
 
-Generar el secreto JWT y pegarlo en `.env`:
+Generar el secreto JWT y pegarlo en `.env` (`JWT_SECRET`):
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 ```
 
-Inicializar la base de datos SQLite:
+Crear la base de datos y, opcionalmente, cargar los datos de demostración:
 
 ```bash
-node scripts/init-sqlite.js
-node scripts/seed-sqlite.js
+npm run db:init
+npm run db:seed
 ```
 
-Arrancar el servidor:
+En producción no se cargan datos demo; en su lugar se crea el primer administrador:
+
+```bash
+npm run seed:admin
+```
+
+Arrancar el servidor (al arrancar aplica el esquema, así una base existente recibe
+las tablas, índices y triggers que le falten):
 
 ```bash
 npm start
 ```
 
 La API queda en `http://localhost:4000`. Prueba: `GET /api/health`.
+
+Otros scripts: `npm run db:reset` (borra la base y la crea de nuevo) y `npm test`.
+
+> La base (`backend/data/sio.db`) **no se versiona**: contiene usuarios y hashes de
+> contraseña. Cada instalación crea la suya.
 
 ### 2. Frontend
 
@@ -63,31 +75,41 @@ Queda en `http://localhost:5173`, con proxy de `/api` al backend.
 
 Para producción: `npm run build` genera `dist/`, que se sirve como archivos estáticos.
 
-### 3. Credenciales de prueba
+### 3. Usuarios de demostración
 
-| Usuario | Contraseña | Rol |
-|---------|-----------|-----|
-| admin | Password123! | SIO_Admin (Administrador) |
-| analista1 | Password123! | SIO_Analistas (Analista) |
-| consulta1 | Password123! | SIO_Consulta (Solo lectura) |
-| auditor1 | Password123! | SIO_Auditoria (Auditor) |
+`npm run db:seed` crea estos usuarios con la contraseña de `SEED_PASSWORD`
+(por defecto `Password123!`). **Todos deben cambiarla en su primer inicio de sesión.**
 
-## Configuración de LDAP (Producción)
+| Usuario | Rol |
+|---------|-----|
+| admin | SIO_Admin (Administrador) |
+| analista1, analista2 | SIO_Analistas (Analista) |
+| consulta1 | SIO_Consulta (Solo lectura) |
+| auditor1 | SIO_Auditoria (Auditor) |
 
-El sistema soporta autenticación LDAP/Active Directory con fallback automático a autenticación local cuando LDAP no está disponible (útil para desarrollo local).
+## Configuración de LDAP / Active Directory
 
-Configura estas variables en `.env`:
+Con `LDAP_URL` vacío el sistema usa solo la autenticación local. Para usar AD:
 
 ```bash
-LDAP_URL=ldap://your-domain-controller.com
+LDAP_URL=ldaps://dc01.empresa.com:636
 LDAP_BASE_DN=DC=empresa,DC=com
-LDAP_DOMAIN=EMPRESA
-LDAP_CA_CERT=/path/to/cert.pem
+LDAP_DOMAIN=empresa.com
+LDAP_CA_CERT=C:\certs\empresa-ca.pem
 LDAP_BIND_USER=CN=sio-service,CN=Users,DC=empresa,DC=com
-LDAP_BIND_PASSWORD=your-bind-password
+LDAP_BIND_PASSWORD=...
 ```
 
-Si LDAP no está configurado o falla, el sistema usa automáticamente la autenticación local con los usuarios en SQLite.
+Los grupos de AD se traducen a los roles del SIO (`SIO_Admin`, `SIO_Analistas`,
+`SIO_Auditoria`, `SIO_Consulta`). Si en AD los grupos se llaman distinto, se indican
+con `AD_GROUP_ADMIN`, `AD_GROUP_ANALISTAS`, `AD_GROUP_AUDITORIA` y
+`AD_GROUP_CONSULTA`. Si el usuario está en varios, gana el de mayor privilegio.
+
+**Fallback a login local.** Si el controlador de dominio no responde, el login
+local solo se permite cuando `LDAP_FALLBACK_LOCAL=true`. Por defecto está activo en
+desarrollo y **desactivado con `NODE_ENV=production`**, para que un corte de AD no
+reabra las cuentas locales. Credenciales rechazadas, cuentas deshabilitadas o
+bloqueadas en AD nunca caen al login local.
 
 ## Endpoints
 
@@ -96,7 +118,7 @@ Si LDAP no está configurado o falla, el sistema usa automáticamente la autenti
 | Método | Ruta | Acceso |
 |--------|------|--------|
 | POST | `/login` | público |
-| POST | `/refresh` | público |
+| POST | `/refresh` | cookie `sio_rt` (httpOnly) |
 | POST | `/logout` | público |
 | POST | `/logout-all` | autenticado |
 | GET | `/me` | autenticado |
@@ -162,41 +184,42 @@ ocultan en la interfaz con `******`. Tipos de valor: `string`, `int`, `bool`,
 
 **El SQL de los KPIs es el punto más delicado del diseño.** La tabla `kpis`
 guarda una consulta que después se ejecuta. Sin controles, un analista podría
-leer `users.password_hash` o borrar tablas. Hay dos barreras:
+leer `users.password_hash` o modificar datos. Hay dos barreras:
 
-1. La real: `sqlExecutor` usa `getReadOnlyPool()`, una conexión con credenciales
-   distintas (`DB_RO_*`) cuyo usuario solo tiene SELECT sobre la base de origen y
-   DENY explícito sobre el esquema del SIO.
-2. La secundaria: validación de texto que exige un solo SELECT, sin comentarios,
-   sin punto y coma intermedio, sin DDL ni DML, sin `SELECT INTO`, sin
-   `OPENROWSET`, sin servidores vinculados y sin referencias a las tablas del
-   sistema.
+1. La real: `sqlExecutor` ejecuta la consulta en un **proceso aparte**
+   (`kpiRunner.js`) que abre SQLite en modo **solo lectura** y con
+   `PRAGMA query_only`. Aunque una consulta burlara la validación de texto,
+   SQLite rechaza cualquier escritura.
+2. La secundaria: validación de texto que exige un solo SELECT/WITH, sin
+   comentarios, sin punto y coma intermedio, sin DDL ni DML, sin `SELECT INTO`,
+   sin `PRAGMA`/`ATTACH` y sin leer las tablas internas del SIO (`users`,
+   `refresh_tokens`, `audit_logs`, `sqlite_master`...).
 
-La segunda barrera por sí sola no basta: cualquier lista negra de palabras se
-puede burlar. Si la conexión de solo lectura no está bien configurada, el sistema
-no está protegido.
+El proceso aparte permite además cortar la consulta: si supera
+`timeout_seconds` se mata el proceso y se responde 504, sin bloquear el servidor
+(better-sqlite3 es síncrono; un hilo no se podría interrumpir). El resultado se
+limita a `max_rows` sin modificar la consulta, así que los KPIs pueden usar su
+propio `LIMIT`.
 
-Además se aplican `SET ROWCOUNT` con el `max_rows` del KPI, un `LOCK_TIMEOUT` de
-5 segundos y el `timeout_seconds` configurado, para que una consulta pesada no
-bloquee la base de origen.
-
-**Tokens.** El token de acceso dura 15 minutos. El refresh es opaco, de 96
-caracteres, y en la base solo se guarda su SHA-256. Cada uso lo consume y emite
-uno nuevo; si llega uno ya revocado se cierran todas las sesiones del usuario,
-porque eso significa que alguien lo está reutilizando. En el frontend, cuando
-varias peticiones reciben 401 a la vez, solo una llama a `/auth/refresh` y las
-demás esperan en cola: sin eso el token rotaría varias veces en paralelo y la
-sesión se cerraría sola.
+**Tokens.** El token de acceso dura 15 minutos y el frontend lo guarda **solo en
+memoria**. El refresh es opaco, de 96 caracteres, viaja **únicamente en una cookie
+`httpOnly`** (`SameSite=Strict`, `Path=/api/auth`, `Secure` en producción) y en la
+base solo se guarda su SHA-256. Al recargar la página la sesión se recupera con
+`/auth/refresh`. Cada uso consume el token y emite uno nuevo; si llega uno revocado
+hace más de 30 segundos se cierran todas las sesiones del usuario (posible robo).
+Un reuso de pocos segundos se trata como una carrera normal (dos pestañas) y solo
+se rechaza. En el frontend, cuando varias peticiones reciben 401 a la vez, solo
+una llama a `/auth/refresh` y las demás esperan en cola.
 
 **Desactivación inmediata.** El middleware consulta el estado del usuario en cada
 petición. Es una lectura extra, pero sin ella desactivar una cuenta no surte
 efecto hasta que expire el token.
 
 **Bloqueo de cuenta.** Cinco intentos fallidos bloquean 15 minutos. El login
-también está limitado por IP a 10 intentos cada 15 minutos. La respuesta es la
-misma si el usuario no existe o si la contraseña es incorrecta, y se ejecuta un
-bcrypt ficticio cuando no se encuentra al usuario para que el tiempo de respuesta
-no delate su existencia.
+también está limitado por IP a 10 intentos cada 15 minutos (`LOGIN_RATE_LIMIT`).
+La respuesta es la misma si el usuario no existe o si la contraseña es incorrecta,
+y se ejecuta un bcrypt ficticio cuando no se encuentra al usuario para que el
+tiempo de respuesta no delate su existencia.
 
 **Último administrador.** No se puede desactivar ni degradar al único admin
 activo, ni desactivarse uno mismo.
@@ -204,67 +227,67 @@ activo, ni desactivarse uno mismo.
 **Sin borrado de usuarios.** Solo desactivación: las llaves foráneas de
 incidentes, KPIs y auditoría necesitan que el registro siga existiendo.
 
-**Auditoría desde la Fase 1.** El middleware se instaló al principio porque toca
-todos los controladores. El controlador declara `res.locals.audit = {...}` y la
-escritura ocurre cuando la respuesta se cierra, ya con el código HTTP real. Las
-contraseñas nunca llegan al registro.
+**Auditoría.** El controlador declara `res.locals.audit = {...}` y la escritura
+ocurre cuando la respuesta se cierra, ya con el código HTTP real. Las contraseñas
+nunca llegan al registro.
 
 ## Cómo evita el sistema la avalancha de alertas
 
-Tres mecanismos combinados:
-
-- Un índice único filtrado permite una sola alerta abierta por umbral. Si la
-  condición sigue incumpliéndose, se incrementa `occurrence_count` en vez de
-  abrir otra.
+- Una sola alerta abierta por umbral. Si la condición sigue incumpliéndose, se
+  incrementa `occurrence_count` en vez de abrir otra.
 - `cooldown_minutes` define cuánto hay que esperar antes de volver a abrir una
   alerta del mismo umbral una vez resuelta.
 - Cuando el KPI vuelve a su rango normal, las alertas abiertas de ese umbral se
   resuelven solas.
 
 El monitor corre con node-cron cada minuto por defecto (`MONITOR_CRON`) y nunca
-solapa ciclos: si el anterior sigue en curso, salta el turno.
+solapa ciclos: si el anterior sigue en curso, salta el turno. Los tickets
+automáticos quedan a nombre del primer administrador activo.
 
-## Notas del esquema
+## Base de datos
 
-- No hay tipo `JSON` en SQL Server antes de 2025: se usa `NVARCHAR(MAX)` con
-  `CHECK (ISJSON(...) = 1)`.
-- `updated_at` se mantiene con triggers `AFTER UPDATE`; el `DEFAULT` solo aplica
-  al insertar.
+- SQLite con `better-sqlite3`, journal **WAL** y `foreign_keys = ON` durante toda
+  la vida de la conexión. Cada escritura va directo al archivo (no se reescribe
+  la base completa), así que un corte no la corrompe.
+- El esquema está en `backend/scripts/create-schema-sqlite.sql` y es idempotente.
+  Lo aplican `npm run db:init` y el servidor al arrancar.
+- Las fechas se guardan en UTC (`YYYY-MM-DD HH:MM:SS`) y la API las devuelve en
+  ISO 8601 con `Z`, para que el navegador las muestre en la hora local correcta.
+- `updated_at` se mantiene con triggers `AFTER UPDATE`.
+- `ticket_number` se genera con un trigger (`TCK-000001`) cuando no se indica.
 - `kpi_history` guarda escalares para las series temporales; `kpi_snapshots`
   guarda el resultado completo en JSON y sirve de caché según `refresh_interval`.
-- `UX_tickets_alert` hace real la relación uno a uno entre alerta e incidente.
-- `ticket_number` es una columna calculada y persistida (`SIO-000001`).
-- `sp_sio_purge_history` borra por lotes de 5000 filas para no bloquear las
-  tablas; se ejecuta por cron a las 3:00 (`PURGE_CRON`).
+- Al arrancar se avisa si hay registros que violan claves foráneas (pueden venir
+  de versiones anteriores, que no las aplicaban).
+- **Un solo proceso.** SQLite con una conexión de escritura: no ejecutar el
+  backend en modo clúster (por ejemplo `pm2 -i`).
 
-## Pruebas realizadas
+## Pruebas
 
-- Sintaxis verificada en todos los archivos del backend.
-- La API arranca y responde: `/api/health` da 200, las rutas protegidas dan 401
-  sin token, un cuerpo inválido da 400 con el detalle por campo.
-- El validador de SQL bloquea los 13 casos de inyección probados: punto y coma
-  con DROP, comentarios, lectura de `users`, DELETE, `SELECT INTO`, `OPENROWSET`,
-  `EXEC`, servidores vinculados, `sys.tables` y consulta vacía. Acepta SELECT
-  simple, CTE con `WITH` y punto y coma final.
-- Los validadores de umbrales rechazan rangos sin mínimo o máximo, mínimo mayor
-  que máximo, condiciones escalares sin valor, listas de correo mal formadas y
-  severidades fuera del catálogo.
-- La evaluación de condiciones da el resultado correcto en `greater_than`,
-  `outside` (dentro y fuera) y con valor nulo.
-- Los exportadores generan archivos válidos con 120 filas de prueba: CSV con BOM
-  y comillas escapadas, XLSX reconocido como Excel 2007+, PDF multipágina.
-- El frontend compila: `npm run build` sin errores.
-- `npm audit` sin vulnerabilidades en el frontend. En el backend queda una
-  moderada heredada de `exceljs`, que depende de una versión antigua de `uuid`;
-  el aviso solo aplica cuando se pasa un búfer propio a `uuid`, cosa que no
-  ocurre aquí, y la "corrección" automática degradaría exceljs a la versión 3.
+```bash
+cd backend
+npm test
+```
 
-## Lo que falta
+La suite (`backend/test/`, con `node:test`) usa una base temporal y cubre:
 
-- Pruebas automatizadas. No hay suite; todo lo anterior se verificó a mano.
-- Migraciones versionadas. Los scripts de `database/` son idempotentes, pero
-  conviene mover los cambios futuros a `backend/migrations/`.
-- Definir si los KPIs leen de una sola base de origen o de varias. Hoy
-  `data_source` es una etiqueta libre y todas las consultas van a la conexión
-  `DB_RO_*`. Si hay varios orígenes, hace falta convertirlo en un catálogo de
-  conexiones.
+- Base de datos: claves foráneas activas tras escribir, rollback de
+  transacciones, fechas en UTC, `lastInsertId` por consulta, triggers de
+  `updated_at` y `ticket_number`.
+- KPIs: consultas con `LIMIT` propio, truncado por `max_rows`, rechazo de tablas
+  internas, conexión de solo lectura y corte por tiempo de una consulta infinita.
+- Autenticación: refresh solo en cookie httpOnly, rotación con `replaced_by`,
+  detección de reuso, logout, paginación de auditoría y bloqueo por intentos.
+- Active Directory: traducción de grupos a roles, alta automática del usuario y
+  que un AD caído, una cuenta bloqueada o credenciales inválidas no permitan el
+  login local en producción.
+
+## Pendiente
+
+- `npm audit` del backend reporta avisos moderados heredados de `exceljs`
+  (`archiver` → `glob`/`minimatch`). Solo afectan al empaquetado interno del XLSX,
+  que no recibe patrones del usuario; la "corrección" automática degradaría
+  exceljs a la versión 3. `uuid` se fuerza a 11.x mediante `overrides`.
+- Definir si los KPIs leen solo de la base del SIO o de otras bases. Hoy
+  `data_source` es una etiqueta libre y todas las consultas van a la misma base
+  (en solo lectura).

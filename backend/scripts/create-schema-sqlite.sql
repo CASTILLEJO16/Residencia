@@ -1,5 +1,5 @@
 -- Esquema SQLite para SIO
--- Ejecutar: sqlite3 data/sio.db < scripts/create-schema-sqlite.sql
+-- Idempotente: lo aplica `node scripts/init-sqlite.js` y tambien el servidor al arrancar.
 
 -- Tabla de roles
 CREATE TABLE IF NOT EXISTS roles (
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
   full_name TEXT NOT NULL,
   role_id INTEGER REFERENCES roles(id),
   is_active INTEGER DEFAULT 1,
-  must_change_password INTEGER DEFAULT 0,
+  must_change_password INTEGER DEFAULT 1,
   failed_login_attempts INTEGER DEFAULT 0,
   locked_until TEXT,
   last_login_at TEXT,
@@ -217,3 +217,37 @@ VALUES
   (2, 'SIO_Analistas', 'Analista de datos', 1),
   (3, 'SIO_Consulta', 'Usuario solo lectura', 1),
   (4, 'SIO_Auditoria', 'Auditor del sistema', 1);
+
+-- Mantener updated_at al dia en cada UPDATE.
+-- (La condicion WHEN evita reentrar si la sentencia ya lo actualizo.)
+CREATE TRIGGER IF NOT EXISTS trg_roles_updated AFTER UPDATE ON roles
+WHEN NEW.updated_at IS OLD.updated_at
+BEGIN UPDATE roles SET updated_at = datetime('now') WHERE id = NEW.id; END;
+
+CREATE TRIGGER IF NOT EXISTS trg_users_updated AFTER UPDATE ON users
+WHEN NEW.updated_at IS OLD.updated_at
+BEGIN UPDATE users SET updated_at = datetime('now') WHERE id = NEW.id; END;
+
+CREATE TRIGGER IF NOT EXISTS trg_kpis_updated AFTER UPDATE ON kpis
+WHEN NEW.updated_at IS OLD.updated_at
+BEGIN UPDATE kpis SET updated_at = datetime('now') WHERE id = NEW.id; END;
+
+CREATE TRIGGER IF NOT EXISTS trg_thresholds_updated AFTER UPDATE ON thresholds
+WHEN NEW.updated_at IS OLD.updated_at
+BEGIN UPDATE thresholds SET updated_at = datetime('now') WHERE id = NEW.id; END;
+
+CREATE TRIGGER IF NOT EXISTS trg_tickets_updated AFTER UPDATE ON tickets
+WHEN NEW.updated_at IS OLD.updated_at
+BEGIN UPDATE tickets SET updated_at = datetime('now') WHERE id = NEW.id; END;
+
+-- Numero de ticket legible (TCK-000123) cuando no se indica uno.
+CREATE TRIGGER IF NOT EXISTS trg_tickets_number AFTER INSERT ON tickets
+WHEN NEW.ticket_number IS NULL
+BEGIN UPDATE tickets SET ticket_number = 'TCK-' || printf('%06d', NEW.id) WHERE id = NEW.id; END;
+
+UPDATE tickets SET ticket_number = 'TCK-' || printf('%06d', id) WHERE ticket_number IS NULL;
+
+-- Correccion de datos de versiones anteriores: replaced_by llego a guardar el
+-- hash del token nuevo en lugar de su id (violaba la clave foranea).
+UPDATE refresh_tokens SET replaced_by = NULL
+WHERE replaced_by IS NOT NULL AND typeof(replaced_by) <> 'integer';

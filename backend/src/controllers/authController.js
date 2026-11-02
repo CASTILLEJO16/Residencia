@@ -1,5 +1,6 @@
-﻿'use strict';
+'use strict';
 
+const crypto = require('crypto');
 const config = require('../config/env');
 const { signAccessToken, generateRefreshToken, hashToken } = require('../config/jwt');
 const UserModel = require('../models/UserModel');
@@ -28,11 +29,43 @@ function publicUser(user) {
   };
 }
 
-async function issueSession(user, req) {
+/**
+ * El refresh token viaja SOLO en una cookie httpOnly (no accesible desde
+ * JavaScript), limitada a /api/auth y con SameSite=Strict. El access token
+ * se devuelve en el cuerpo y el frontend lo guarda solo en memoria.
+ */
+const REFRESH_COOKIE = 'sio_rt';
+
+function refreshCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: config.isProd,
+    sameSite: 'strict',
+    path: '/api/auth',
+  };
+}
+
+function setRefreshCookie(res, token) {
+  res.cookie(REFRESH_COOKIE, token, {
+    ...refreshCookieOptions(),
+    maxAge: config.jwt.refreshDays * 24 * 60 * 60 * 1000,
+  });
+}
+
+function clearRefreshCookie(res) {
+  res.clearCookie(REFRESH_COOKIE, refreshCookieOptions());
+}
+
+function readRefreshToken(req) {
+  const token = req.cookies?.[REFRESH_COOKIE];
+  return typeof token === 'string' && /^[a-f0-9]{96}$/.test(token) ? token : null;
+}
+
+async function issueSession(user, req, res) {
   const accessToken = signAccessToken(user);
   const { token, hash } = generateRefreshToken();
 
-  await RefreshTokenModel.save({
+  const id = await RefreshTokenModel.save({
     userId: user.id,
     tokenHash: hash,
     expiresAt: refreshExpiry(),
@@ -40,35 +73,20 @@ async function issueSession(user, req) {
     userAgent: (req.headers['user-agent'] || '').slice(0, 255),
   });
 
-  return {
-    accessToken,
-    refreshToken: token,
-  };
+  setRefreshCookie(res, token);
+  return { accessToken, refreshTokenId: id };
 }
 
 /**
- * Busca el rol de SQLite correspondiente a un grupo de Active Directory.
+ * Busca el id del rol del SIO correspondiente a los grupos de Active Directory.
+ *
+ * Los roles de la base se llaman SIO_Admin, SIO_Analistas, SIO_Auditoria y
+ * SIO_Consulta; ldapService.resolveRole traduce los grupos de AD (cuyo nombre
+ * real se configura con AD_GROUP_*) al de mayor privilegio.
  */
 async function getRoleIdFromADGroups(groups = []) {
-  const roleMap = {
-    SIO_Admin: 'admin',
-    SIO_Analistas: 'analista',
-    SIO_Consulta: 'viewer',
-    SIO_Auditoria: 'viewer',
-  };
-
-  let roleName = null;
-
-  for (const group of groups) {
-    if (roleMap[group]) {
-      roleName = roleMap[group];
-      break;
-    }
-  }
-
-  if (!roleName) {
-    return null;
-  }
+  const roleName = ldapService.resolveRole(groups);
+  if (!roleName) return null;
 
   const result = await query(
     'SELECT id FROM roles WHERE name = ? LIMIT 1',
@@ -78,17 +96,25 @@ async function getRoleIdFromADGroups(groups = []) {
   return result.recordset[0]?.id || null;
 }
 
+/** Solo los fallos de conexion con el directorio permiten caer al login local. */
+function isDirectoryUnavailable(err) {
+  if (err instanceof AppError) {
+    return err.code === 'AD_UNAVAILABLE' || err.code === 'AD_TLS';
+  }
+  return true; // error inesperado de red/libreria
+}
+
 /**
  * POST /api/auth/login
  *
- * Si LDAP/AD estÃ¡ configurado:
- *   1. Valida usuario y contraseÃ±a contra Active Directory.
+ * Si LDAP/AD está configurado:
+ *   1. Valida usuario y contraseña contra Active Directory.
  *   2. Obtiene sus grupos.
  *   3. Convierte el grupo AD en un rol de SQLite.
  *   4. Crea o sincroniza el usuario en SQLite.
  *   5. Mantiene las sesiones, JWT y refresh tokens en SQLite.
  *
- * Si LDAP no estÃ¡ configurado:
+ * Si LDAP no está configurado:
  *   utiliza el login local original.
  */
 const login = asyncHandler(async (req, res) => {
@@ -102,17 +128,32 @@ const login = asyncHandler(async (req, res) => {
   // LOGIN ACTIVE DIRECTORY
   // ============================================================
 
-  if (config.ldap?.url) {
+  if (config.ldap.url) {
+    let directoryUser = null;
     try {
-      const directoryUser = await ldapService.authenticate(
-        username,
-        plain
-      );
+      directoryUser = await ldapService.authenticate(username, plain);
+      if (!directoryUser) throw genericError;
+    } catch (err) {
+      // Credenciales incorrectas, cuenta deshabilitada/bloqueada en AD, etc.:
+      // se responde tal cual, sin intentar el login local.
+      if (!isDirectoryUnavailable(err)) throw err;
 
-      if (!directoryUser) {
-        throw genericError;
+      // El directorio no responde. Solo se cae al login local si
+      // LDAP_FALLBACK_LOCAL lo permite (por defecto: si en desarrollo, no en
+      // produccion), para que un corte del controlador de dominio no reabra
+      // las cuentas locales en produccion.
+      if (!config.ldap.fallbackLocal) {
+        console.error('[AUTH AD] LDAP no disponible:', err.message);
+        throw new AppError(
+          'El servicio de directorio no esta disponible. Intente mas tarde',
+          503,
+          'AD_UNAVAILABLE'
+        );
       }
+      console.warn('[AUTH AD] LDAP no disponible, usando autenticacion local:', err.message);
+    }
 
+    if (directoryUser) {
       // Obtener rol desde los grupos de AD
       const roleId = await getRoleIdFromADGroups(
         directoryUser.groups || []
@@ -145,7 +186,7 @@ const login = asyncHandler(async (req, res) => {
       );
 
       if (user) {
-        // Actualizar informaciÃ³n proveniente de AD
+        // Actualizar información proveniente de AD
         user = await UserModel.syncDirectoryUser(user.id, {
           email: directoryUser.email,
           fullName: directoryUser.fullName,
@@ -153,14 +194,9 @@ const login = asyncHandler(async (req, res) => {
         });
       } else {
         // Crear usuario AD en SQLite.
-        // La contraseÃ±a almacenada aquÃ­ NO se utiliza para
+        // La contraseña almacenada aquí NO se utiliza para
         // autenticar al usuario AD.
-        const temporaryPassword = [
-          'AD',
-          Date.now(),
-          Math.random(),
-          directoryUser.username,
-        ].join('-');
+        const temporaryPassword = crypto.randomBytes(48).toString('base64');
 
         const passwordHash = await password.hash(
           temporaryPassword
@@ -191,8 +227,8 @@ const login = asyncHandler(async (req, res) => {
       // Registrar acceso exitoso en SQLite
       await UserModel.registerSuccessfulLogin(user.id);
 
-      // Crear sesiÃ³n normal de SQLite/JWT
-      const tokens = await issueSession(user, req);
+      // Crear sesión normal de SQLite/JWT
+      const { accessToken } = await issueSession(user, req, res);
 
       audit(res, {
         userId: user.id,
@@ -210,25 +246,10 @@ const login = asyncHandler(async (req, res) => {
         success: true,
         data: {
           user: publicUser(user),
-          ...tokens,
+          accessToken,
           expiresIn: config.jwt.accessTtl,
         },
       });
-
-    } catch (err) {
-      // Errores de autenticaciÃ³n/autorizaciÃ³n conocidos
-      if (
-        err?.statusCode === 401 ||
-        err?.statusCode === 403 ||
-        err?.code === 'AD_MUST_CHANGE'
-      ) {
-        throw err;
-      }
-
-      // Si LDAP no estÃ¡ disponible (timeout, connection error, etc.),
-      // hacer fallback a autenticaciÃ³n local para desarrollo
-      console.warn('[AUTH AD] LDAP no disponible, usando autenticaciÃ³n local:', err.message);
-      // Continuar al login local (no throw)
     }
   }
 
@@ -239,7 +260,7 @@ const login = asyncHandler(async (req, res) => {
   const user = await UserModel.findByUsernameWithSecret(username);
 
   if (!user) {
-    // ComparaciÃ³n ficticia para evitar diferencias de tiempo
+    // Comparación ficticia para evitar diferencias de tiempo
     // entre usuario existente y usuario inexistente.
     await password.verify(
       plain,
@@ -316,7 +337,7 @@ const login = asyncHandler(async (req, res) => {
 
   await UserModel.registerSuccessfulLogin(user.id);
 
-  const tokens = await issueSession(user, req);
+  const { accessToken } = await issueSession(user, req, res);
 
   audit(res, {
     userId: user.id,
@@ -330,7 +351,7 @@ const login = asyncHandler(async (req, res) => {
     success: true,
     data: {
       user: publicUser(user),
-      ...tokens,
+      accessToken,
       expiresIn: config.jwt.accessTtl,
     },
   });
@@ -340,54 +361,69 @@ const login = asyncHandler(async (req, res) => {
  * POST /api/auth/refresh
  *
  * Rotacion estricta: cada refresh consume el token anterior.
- * Si llega un token ya revocado se cierran todas las sesiones
- * del usuario.
+ * Si llega un token revocado hace tiempo (posible robo y reuso) se cierran
+ * todas las sesiones del usuario. Un reuso de pocos segundos se trata como
+ * una carrera normal (dos pestanas renovando a la vez) y solo se rechaza.
  */
+const REUSE_GRACE_SECONDS = 30;
+
 const refresh = asyncHandler(async (req, res) => {
-  const incoming = req.body.refreshToken;
+  const incoming = readRefreshToken(req);
+  if (!incoming) {
+    throw AppError.unauthorized('Sesion no iniciada');
+  }
   const incomingHash = hashToken(incoming);
 
-  const stored = await RefreshTokenModel.findValid(incomingHash);
+  const stored = await RefreshTokenModel.findByHash(incomingHash);
 
-  if (!stored) {
-    throw AppError.unauthorized(
-      'Refresh token invalido o expirado'
-    );
+  if (!stored || stored.expired) {
+    clearRefreshCookie(res);
+    throw AppError.unauthorized('Refresh token invalido o expirado');
+  }
+
+  if (stored.revoked_at) {
+    if (stored.revoked_seconds_ago > REUSE_GRACE_SECONDS) {
+      const count = await RefreshTokenModel.revokeAllForUser(stored.user_id);
+      await AuditLogModel.write({
+        userId: stored.user_id,
+        action: 'auth.refresh_reuse',
+        entityType: 'user',
+        entityId: stored.user_id,
+        method: req.method,
+        endpoint: req.originalUrl,
+        statusCode: 401,
+        ipAddress: clientIp(req),
+        userAgent: req.headers['user-agent'],
+        newValues: { sessionsRevoked: count },
+      });
+      clearRefreshCookie(res);
+    }
+    throw AppError.unauthorized('Refresh token invalido o expirado');
   }
 
   const user = await UserModel.findById(stored.user_id);
 
   if (!user || !user.is_active) {
-    await RefreshTokenModel.revokeAllForUser(
-      stored.user_id
-    );
-
-    throw AppError.forbidden(
-      'La cuenta no esta disponible'
-    );
+    await RefreshTokenModel.revokeAllForUser(stored.user_id);
+    clearRefreshCookie(res);
+    throw AppError.forbidden('La cuenta no esta disponible');
   }
 
-  const { token, hash } = generateRefreshToken();
+  // Se consume el token de forma atomica: si otra peticion lo uso en
+  // paralelo, esta pierde la carrera y no se emite una sesion nueva.
+  const consumed = await RefreshTokenModel.revoke(incomingHash);
+  if (!consumed) {
+    throw AppError.unauthorized('Refresh token invalido o expirado');
+  }
 
-  await RefreshTokenModel.revoke(
-    incomingHash,
-    hash
-  );
-
-  await RefreshTokenModel.save({
-    userId: user.id,
-    tokenHash: hash,
-    expiresAt: refreshExpiry(),
-    ipAddress: clientIp(req),
-    userAgent: (req.headers['user-agent'] || '').slice(0, 255),
-  });
+  const { accessToken, refreshTokenId } = await issueSession(user, req, res);
+  await RefreshTokenModel.linkReplacement(incomingHash, refreshTokenId);
 
   res.json({
     success: true,
     data: {
       user: publicUser(user),
-      accessToken: signAccessToken(user),
-      refreshToken: token,
+      accessToken,
       expiresIn: config.jwt.accessTtl,
     },
   });
@@ -396,16 +432,15 @@ const refresh = asyncHandler(async (req, res) => {
 /**
  * POST /api/auth/logout
  *
- * Revoca el refresh token enviado.
+ * Revoca el refresh token de la cookie y la borra.
  */
 const logout = asyncHandler(async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = readRefreshToken(req);
 
   if (refreshToken) {
-    await RefreshTokenModel.revoke(
-      hashToken(refreshToken)
-    );
+    await RefreshTokenModel.revoke(hashToken(refreshToken));
   }
+  clearRefreshCookie(res);
 
   audit(res, {
     action: 'auth.logout',
@@ -430,6 +465,7 @@ const logoutAll = asyncHandler(async (req, res) => {
   const count = await RefreshTokenModel.revokeAllForUser(
     req.user.id
   );
+  clearRefreshCookie(res);
 
   audit(res, {
     action: 'auth.logout_all',
@@ -510,6 +546,7 @@ const changePassword = asyncHandler(async (req, res) => {
   await RefreshTokenModel.revokeAllForUser(
     req.user.id
   );
+  clearRefreshCookie(res);
 
   audit(res, {
     action: 'auth.password_changed',
@@ -526,6 +563,7 @@ const changePassword = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  _internal: { getRoleIdFromADGroups, isDirectoryUnavailable },
   login,
   refresh,
   logout,

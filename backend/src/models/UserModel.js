@@ -1,5 +1,5 @@
-﻿'use strict';
-const { query, getLastInsertId } = require('../config/database');
+'use strict';
+const { query } = require('../config/database');
 const { parsePagination, buildMeta, safeSort } = require('../utils/pagination');
 
 /** Columnas publicas: nunca se expone password_hash. */
@@ -54,7 +54,7 @@ async function existsByUsernameOrEmail(username, email, excludeId = null) {
 async function list(queryParams) {
   const { page, limit, offset } = parsePagination(queryParams);
   let { column, direction } = safeSort(queryParams.sort, SORTABLE, 'created_at');
-  // Compatibilidad: la columna fÃ­sica es last_login_at pero la API expone last_login
+  // Compatibilidad: la columna fisica es last_login_at pero la API expone last_login
   if (column === 'last_login') column = 'last_login_at';
   const search = queryParams.search ? `%${queryParams.search}%` : null;
   const roleId = queryParams.roleId ? parseInt(queryParams.roleId, 10) : null;
@@ -87,12 +87,12 @@ async function list(queryParams) {
 }
 
 async function create({ username, email, fullName, passwordHash, roleId, mustChangePassword = true }) {
-  await query(
+  const inserted = await query(
     `INSERT INTO users (username, email, full_name, password_hash, role_id, must_change_password)
      VALUES (?, ?, ?, ?, ?, ?)`,
     [username, email, fullName, passwordHash, roleId, mustChangePassword]
   );
-  const id = getLastInsertId();
+  const id = inserted.lastInsertId;
   return findById(id);
 }
 

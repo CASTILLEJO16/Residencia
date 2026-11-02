@@ -1,5 +1,5 @@
 'use strict';
-const { query, getLastInsertId } = require('../config/database');
+const { query } = require('../config/database');
 
 const FIELDS = `
   t.id, t.kpi_id, k.name AS kpi_name, t.name, t.condition_type,
@@ -61,14 +61,14 @@ function params(data) {
 }
 
 async function create(data, userId) {
-  await query(
+  const inserted = await query(
     `INSERT INTO thresholds
        (kpi_id, name, condition_type, threshold_value, threshold_min, threshold_max,
         severity, cooldown_minutes, auto_create_ticket, notify_emails, is_active, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, 30), COALESCE(?, false),
              ?, COALESCE(?, true), ?)`,
     [...params(data), userId]);
-  const id = getLastInsertId();
+  const id = inserted.lastInsertId;
   return findById(id);
 }
 
@@ -86,7 +86,7 @@ async function update(id, data) {
        notify_emails      = COALESCE(?, notify_emails),
        is_active          = COALESCE(?, is_active)
      WHERE id = ?`,
-    [...params(data), id]);
+    [...params(data).slice(1), id]); // kpi_id no se modifica
   return findById(id);
 }
 

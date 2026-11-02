@@ -1,5 +1,6 @@
 'use strict';
 const { z } = require('zod');
+const { partialWithoutDefaults } = require('./helpers');
 
 const CONDITIONS = ['greater_than', 'less_than', 'equals', 'not_equals', 'between', 'outside'];
 const SEVERITIES = ['low', 'medium', 'high', 'critical'];
@@ -44,7 +45,7 @@ const createThresholdSchema = z.object({
   ...base,
 }).superRefine(checkValues);
 
-const updateThresholdSchema = z.object(base).partial().superRefine((data, ctx) => {
+const updateThresholdSchema = partialWithoutDefaults(z.object(base)).superRefine((data, ctx) => {
   if (Object.keys(data).length === 0) {
     ctx.addIssue({ code: 'custom', message: 'Debe enviar al menos un campo' });
   }

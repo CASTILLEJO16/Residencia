@@ -1,13 +1,12 @@
 'use strict';
 const app = require('./app');
 const config = require('./config/env');
-const { initDb, closeAll } = require('./config/database');
+const { initDb, applySchema, closeAll } = require('./config/database');
 const scheduler = require('./services/schedulerService');
 
 async function start() {
   try {
-    await initDb();
-    console.log(`[db] SQLite conectado`);
+    applySchema(initDb());
   } catch (err) {
     console.error('[db] no se pudo conectar:', err.message);
     process.exit(1);

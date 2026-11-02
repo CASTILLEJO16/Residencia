@@ -1,5 +1,5 @@
 'use strict';
-const { query, getLastInsertId } = require('../config/database');
+const { query } = require('../config/database');
 const { parsePagination, buildMeta, safeSort } = require('../utils/pagination');
 
 const FIELDS = `
@@ -50,7 +50,7 @@ async function list(params) {
      LEFT JOIN users u ON u.id = k.created_by
      ${where} ORDER BY k.${column} ${direction}
      LIMIT ? OFFSET ?`,
-    [args[0], args[0], args[0], args[1], args[1], args[2], args[2], args[3], args[4]]);
+    [args[0], args[0], args[0], args[1], args[1], args[2], args[2], args[4], args[3]]);
 
   const count = await query(
     `SELECT COUNT(*) AS total FROM kpis k ${where}`,
@@ -60,14 +60,14 @@ async function list(params) {
 }
 
 async function create(data, userId) {
-  await query(
+  const inserted = await query(
     `INSERT INTO kpis
        (name, description, sql_query, data_source, refresh_interval, max_rows,
         timeout_seconds, widget_type, value_column, label_column, is_active, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [data.name, data.description ?? null, data.sqlQuery, data.dataSource ?? null, data.refreshInterval ?? 300, data.maxRows ?? 1000, data.timeoutSeconds ?? 15, data.widgetType, data.valueColumn ?? null, data.labelColumn ?? null, data.isActive ?? true, userId]
   );
-  const id = getLastInsertId();
+  const id = inserted.lastInsertId;
   return findById(id);
 }
 
@@ -97,7 +97,7 @@ async function countDependencies(id) {
     `SELECT
        (SELECT COUNT(*) FROM thresholds WHERE kpi_id = ?) AS thresholds,
        (SELECT COUNT(*) FROM alerts     WHERE kpi_id = ?) AS alerts`,
-    [id]
+    [id, id]
   );
   return result.recordset[0];
 }
