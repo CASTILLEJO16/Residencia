@@ -90,9 +90,14 @@ npm run build
 cd backend
 npm install -g pm2-windows-startup
 pm2-startup install
-pm2 start src/server.js --name sio-backend
+npm run db:init
+npm run seed:admin
+pm2 start src/server.js --name sio-backend -i 1
 pm2 save
 ```
+
+> **Una sola instancia.** El backend usa SQLite con una única conexión de
+> escritura: no lo arranques en modo clúster (`-i max` o `-i 2+`).
 
 ### 3. Configurar firewall
 ```powershell
@@ -111,12 +116,14 @@ PORT=4000
 CORS_ORIGIN=https://tu-dominio.com
 DB_PATH=./data/sio.db
 JWT_SECRET=tu-secreto-seguro-aqui
-LDAP_URL=ldap://tu-servidor-ad.com
+LDAP_URL=ldaps://tu-servidor-ad.com:636
 LDAP_BASE_DN=DC=empresa,DC=com
-LDAP_DOMAIN=EMPRESA
+LDAP_DOMAIN=empresa.com
 LDAP_CA_CERT=C:\certs\lab-root-ca.pem
 LDAP_BIND_USER=CN=sio-service,CN=Users,DC=empresa,DC=com
 LDAP_BIND_PASSWORD=tu-password
+# Si AD no responde, NO permitir el login local (valor por defecto en produccion)
+LDAP_FALLBACK_LOCAL=false
 MAIL_ENABLED=true
 MAIL_HOST=smtp.empresa.com
 MAIL_PORT=587
@@ -125,6 +132,10 @@ MAIL_USER=sio@empresa.com
 MAIL_PASSWORD=tu-password
 MAIL_FROM=SIO <no-reply@empresa.com>
 ```
+
+> Con `NODE_ENV=production` la cookie de sesión (`sio_rt`) se marca `Secure`:
+> el sitio debe servirse por **HTTPS** y el frontend y la API deben estar en el
+> mismo dominio (por ejemplo, la API detrás del reverse proxy en `/api`).
 
 ## Verificación
 

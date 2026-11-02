@@ -1,5 +1,7 @@
 'use strict';
-const { query } = require('../config/database');
+const path = require('path');
+const { fork } = require('child_process');
+const { dbPath, normalizeRow } = require('../config/database');
 const AppError = require('./AppError');
 
 /**
@@ -7,21 +9,23 @@ const AppError = require('./AppError');
  *
  * IMPORTANTE: la validacion de texto que hay aqui es una segunda linea de
  * defensa, no la principal. Cualquier lista negra de palabras se puede
- * burlar. El control real es que esto corre con la conexión SQLite.
+ * burlar. El control real es que la consulta corre en un proceso aparte con
+ * una conexion SQLite de SOLO LECTURA (ver kpiRunner.js).
  */
 
 // Palabras que no tienen ningun motivo para aparecer en la consulta de un KPI.
 const FORBIDDEN = [
   'insert', 'update', 'delete', 'merge', 'truncate', 'drop', 'alter', 'create',
   'grant', 'revoke', 'deny', 'exec', 'execute', 'sp_executesql', 'backup',
-  'restore', 'shutdown', 'reconfigure', 'kill', 'dbcc', 'waitfor', 'openrowset',
+  'restore', 'vacuum', 'reindex', 'analyze', 'shutdown', 'reconfigure', 'kill', 'dbcc', 'waitfor', 'openrowset',
   'openquery', 'opendatasource', 'openxml', 'bulk', 'sysadmin', 'xp_cmdshell',
 ];
 
 // Objetos internos del SIO: un KPI nunca debe leerlos.
 const FORBIDDEN_OBJECTS = [
   'users', 'roles', 'refresh_tokens', 'password_resets', 'audit_logs',
-  'system_config', 'sys.', 'sysobjects', 'syscolumns', 'information_schema',
+  'system_config', 'sqlite_master', 'sqlite_schema', 'sqlite_temp_master',
+  'pragma', 'attach', 'sys.', 'sysobjects', 'syscolumns', 'information_schema',
   'fn_my_permissions', 'suser_', 'is_srvrolemember',
 ];
 
@@ -94,61 +98,92 @@ function sanitizeInt(value, fallback, min, max) {
   return n;
 }
 
+/** Corre la consulta en un proceso hijo de solo lectura, con tiempo limite. */
+function runIsolated(sql, limit, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const child = fork(path.join(__dirname, 'kpiRunner.js'), [], {
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+      serialization: 'advanced',
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (child.exitCode === null) child.kill('SIGKILL');
+      fn(value);
+    };
+    const timer = setTimeout(() => {
+      const err = new Error('timeout');
+      err.code = 'ETIMEOUT';
+      finish(reject, err);
+    }, timeoutMs);
+
+    child.once('message', (msg) => {
+      if (msg.ok) finish(resolve, msg);
+      else finish(reject, new Error(msg.message));
+    });
+    child.once('error', (err) => finish(reject, err));
+    child.once('exit', (code) => {
+      finish(reject, new Error(`El ejecutor termino inesperadamente (${code}) ${stderr.trim()}`));
+    });
+
+    child.send({ dbFile: dbPath(), sql, limit });
+  });
+}
+
 /**
- * Ejecuta la consulta contra SQLite.
+ * Ejecuta la consulta contra SQLite en una conexion de solo lectura.
  * @returns {{rows: Array, columns: Array, rowCount: number, durationMs: number, truncated: boolean}}
  */
 async function execute(rawQuery, { maxRows = 1000, timeoutSeconds = 15 } = {}) {
   assertQueryIsSafe(rawQuery);
 
   const limit = sanitizeInt(maxRows, 1000, 1, 10000);
+  const timeoutMs = sanitizeInt(timeoutSeconds, 15, 1, 300) * 1000;
   const body = String(rawQuery).trim().replace(/;\s*$/, '');
 
   const startedAt = Date.now();
   let result;
   try {
-    const limitedQuery = `${body} LIMIT ${limit}`;
-    result = await query(limitedQuery);
+    // Se pide una fila de mas para saber si el resultado quedo truncado.
+    result = await runIsolated(body, limit + 1, timeoutMs);
   } catch (err) {
     if (err.code === 'ETIMEOUT') {
       throw new AppError(
-        `La consulta supero el limite de ${timeout / 1000} segundos`, 504, 'KPI_TIMEOUT'
+        `La consulta supero el limite de ${timeoutMs / 1000} segundos`, 504, 'KPI_TIMEOUT'
       );
     }
     throw AppError.badRequest(`Error al ejecutar la consulta: ${err.message}`);
   }
   const durationMs = Date.now() - startedAt;
 
-  const rows = result.recordset || [];
-  const columns = result.recordset?.columns
-    ? Object.entries(result.recordset.columns).map(([name, meta]) => ({
-        name,
-        type: meta.type?.name || 'unknown',
-        numeric: isNumericType(meta.type?.name),
-      }))
-    : inferColumns(rows);
+  const truncated = result.rows.length > limit;
+  const rows = result.rows.slice(0, limit).map(normalizeRow);
+  const columns = inferColumns(rows, result.columns);
 
   return {
     rows,
     columns,
     rowCount: rows.length,
     durationMs,
-    truncated: rows.length >= limit,
+    truncated,
   };
 }
 
-function isNumericType(typeName) {
-  return ['Int', 'BigInt', 'SmallInt', 'TinyInt', 'Decimal', 'Numeric',
-    'Float', 'Real', 'Money', 'SmallMoney'].includes(typeName);
-}
-
-function inferColumns(rows) {
-  if (!rows.length) return [];
-  return Object.keys(rows[0]).map((name) => ({
-    name,
-    type: typeof rows[0][name],
-    numeric: typeof rows[0][name] === 'number',
-  }));
+function inferColumns(rows, declared = []) {
+  const names = declared.length ? declared.map((c) => c.name) : Object.keys(rows[0] || {});
+  return names.map((name) => {
+    const sample = rows.find((r) => r[name] !== null && r[name] !== undefined)?.[name];
+    return {
+      name,
+      type: sample === undefined ? 'unknown' : typeof sample,
+      numeric: typeof sample === 'number',
+    };
+  });
 }
 
 /** Ejecuta sin guardar nada: sirve para el boton "Probar consulta". */

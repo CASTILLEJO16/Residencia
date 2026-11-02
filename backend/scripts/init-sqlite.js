@@ -1,42 +1,24 @@
-const initSqlJs = require('sql.js');
+'use strict';
+/**
+ * Crea (o actualiza) la base SQLite aplicando el esquema.
+ *
+ *   node scripts/init-sqlite.js          aplica el esquema sobre la base existente
+ *   node scripts/init-sqlite.js --reset  BORRA la base y la crea desde cero
+ */
+require('dotenv').config();
 const fs = require('fs');
-const path = require('path');
+const { dbPath, initDb, applySchema, closeAll } = require('../src/config/database');
 
-async function init() {
-  const SQL = await initSqlJs();
-  const dbPath = path.join(__dirname, '../data/sio.db');
-  const schemaPath = path.join(__dirname, 'create-schema-sqlite.sql');
+const file = dbPath();
+const reset = process.argv.includes('--reset');
 
-  console.log(`[init] Creando base de datos SQLite: ${dbPath}`);
-
-  // Eliminar base de datos existente si existe
-  if (fs.existsSync(dbPath)) {
-    console.log('[init] Eliminando base de datos existente...');
-    fs.unlinkSync(dbPath);
+if (reset && file !== ':memory:') {
+  for (const suffix of ['', '-wal', '-shm']) {
+    if (fs.existsSync(file + suffix)) fs.unlinkSync(file + suffix);
   }
-
-  // Crear directorio si no existe
-  const dir = path.dirname(dbPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
-  // Crear nueva base de datos
-  const db = new SQL.Database();
-  db.run('PRAGMA foreign_keys = ON');
-
-  // Leer y ejecutar esquema
-  const schema = fs.readFileSync(schemaPath, 'utf8');
-  console.log('[init] Ejecutando esquema...');
-  db.exec(schema);
-
-  // Guardar base de datos
-  const data = db.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(dbPath, buffer);
-
-  console.log('[init] Base de datos creada exitosamente');
-  db.close();
+  console.log(`[init] Base eliminada: ${file}`);
 }
 
-init().catch(console.error);
+applySchema(initDb());
+closeAll();
+console.log('[init] Esquema aplicado correctamente');

@@ -1,5 +1,5 @@
 'use strict';
-const { query, getLastInsertId } = require('../config/database');
+const { query } = require('../config/database');
 
 const BASE_SELECT = `
   SELECT r.id, r.name, r.description, r.created_at, r.updated_at,
@@ -22,12 +22,12 @@ async function findByName(name) {
 }
 
 async function create({ name, description }) {
-  await query(
+  const inserted = await query(
     `INSERT INTO roles (name, description)
      VALUES (?, ?)`,
     [name, description]
   );
-  const id = getLastInsertId();
+  const id = inserted.lastInsertId;
   return findById(id);
 }
 

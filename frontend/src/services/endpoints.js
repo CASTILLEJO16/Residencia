@@ -5,7 +5,7 @@ const unwrapList = (promise) => promise.then((r) => ({ data: r.data.data, meta: 
 
 export const authApi = {
   login: (username, password) => unwrap(api.post('/auth/login', { username, password })),
-  logout: (refreshToken) => api.post('/auth/logout', { refreshToken }),
+  logout: () => api.post('/auth/logout'),
   logoutAll: () => api.post('/auth/logout-all'),
   me: () => unwrap(api.get('/auth/me')),
   changePassword: (currentPassword, newPassword) =>

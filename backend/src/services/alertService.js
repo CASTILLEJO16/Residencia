@@ -5,6 +5,11 @@ const KpiModel = require('../models/KpiModel');
 const AuditLogModel = require('../models/AuditLogModel');
 const kpiService = require('./kpiService');
 const emailService = require('./emailService');
+const { query } = require('../config/database');
+
+function isUniqueViolation(err) {
+  return String(err?.code || '').startsWith('SQLITE_CONSTRAINT_UNIQUE');
+}
 
 /**
  * Evalua una condicion contra un valor. Devuelve true si la condicion
@@ -108,7 +113,7 @@ async function evaluateThresholds(kpi, value, thresholds) {
     } catch (err) {
       // El indice unico puede rechazar la insercion si otra instancia
       // del monitor gano la carrera. No es un error real.
-      if (err.number === 2601 || err.number === 2627) continue;
+      if (isUniqueViolation(err)) continue;
       console.error('[alert] fallo al crear la alerta:', err.message);
     }
   }
@@ -119,10 +124,14 @@ async function evaluateThresholds(kpi, value, thresholds) {
 /** Se importa aqui para evitar un ciclo de dependencias con ticketService. */
 async function createTicketForAlert(alert, threshold) {
   const TicketModel = require('../models/TicketModel');
-  const UserModel = require('../models/UserModel');
   try {
-    const system = await UserModel.list({ limit: 1, isActive: 'true' });
-    const creatorId = system.data[0]?.id;
+    // El ticket automatico queda a nombre del primer administrador activo.
+    const { recordset } = await query(
+      `SELECT u.id FROM users u INNER JOIN roles r ON r.id = u.role_id
+       WHERE u.is_active = 1 AND r.name = 'SIO_Admin'
+       ORDER BY u.id LIMIT 1`
+    );
+    const creatorId = recordset[0]?.id;
     if (!creatorId) return null;
 
     const ticket = await TicketModel.create({
@@ -139,7 +148,7 @@ async function createTicketForAlert(alert, threshold) {
     });
     return ticket;
   } catch (err) {
-    if (err.number === 2601 || err.number === 2627) return null; // ya existia
+    if (isUniqueViolation(err)) return null; // ya existia
     console.error('[alert] no se pudo crear el ticket automatico:', err.message);
     return null;
   }

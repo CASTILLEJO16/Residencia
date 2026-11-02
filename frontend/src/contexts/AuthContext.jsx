@@ -1,6 +1,6 @@
 import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
 import { authApi } from '../services/endpoints';
-import { tokenStore, setSessionExpiredHandler } from '../services/api';
+import { tokenStore, setSessionExpiredHandler, restoreSession } from '../services/api';
 import { ROLES, normalizeRole, hasRoleAny } from '../utils/constants';
 
 export const AuthContext = createContext(null);
@@ -21,10 +21,10 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!tokenStore.access) { setLoading(false); return; }
+      // Recupera la sesion a partir de la cookie httpOnly del refresh token.
       try {
-        const me = await authApi.me();
-        if (!cancelled) setUser(me);
+        const session = await restoreSession();
+        if (!cancelled) setUser(session.user);
       } catch {
         tokenStore.clear();
       } finally {
@@ -43,7 +43,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(async () => {
-    try { await authApi.logout(tokenStore.refresh); } catch { /* la sesion local se cierra igual */ }
+    try { await authApi.logout(); } catch { /* la sesion local se cierra igual */ }
     tokenStore.clear();
     setUser(null);
   }, []);

@@ -1,18 +1,26 @@
 import axios from 'axios';
 
-const ACCESS_KEY = 'sio.accessToken';
-const REFRESH_KEY = 'sio.refreshToken';
+/**
+ * El access token vive solo en memoria (no en localStorage), asi un XSS no
+ * puede leerlo de almacenamiento persistente. El refresh token lo maneja el
+ * navegador en una cookie httpOnly que JavaScript no puede leer; al recargar
+ * la pagina la sesion se recupera llamando a /auth/refresh.
+ */
+let accessToken = null;
+
+// Limpieza de versiones anteriores que guardaban los tokens en localStorage.
+try {
+  localStorage.removeItem('sio.accessToken');
+  localStorage.removeItem('sio.refreshToken');
+} catch { /* almacenamiento no disponible */ }
 
 export const tokenStore = {
-  get access() { return localStorage.getItem(ACCESS_KEY); },
-  get refresh() { return localStorage.getItem(REFRESH_KEY); },
-  set({ accessToken, refreshToken }) {
-    if (accessToken) localStorage.setItem(ACCESS_KEY, accessToken);
-    if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken);
+  get access() { return accessToken; },
+  set({ accessToken: token }) {
+    if (token) accessToken = token;
   },
   clear() {
-    localStorage.removeItem(ACCESS_KEY);
-    localStorage.removeItem(REFRESH_KEY);
+    accessToken = null;
   },
 };
 
@@ -20,6 +28,7 @@ const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
   timeout: 60000,
+  withCredentials: true,
 });
 
 api.interceptors.request.use((config) => {
@@ -39,6 +48,28 @@ api.interceptors.request.use((config) => {
  */
 let refreshing = null;
 let queue = [];
+
+/**
+ * Renueva la sesion usando la cookie httpOnly. Si ya hay una renovacion en
+ * curso se reutiliza (evita rotar el token dos veces, p. ej. con StrictMode).
+ * Devuelve { user, accessToken } o lanza si no hay sesion.
+ */
+let restoring = null;
+export function restoreSession() {
+  if (!restoring) {
+    restoring = axios.post('/api/auth/refresh', null, { withCredentials: true })
+      .then(({ data }) => {
+        tokenStore.set(data.data);
+        return data.data;
+      })
+      .finally(() => { restoring = null; });
+  }
+  return restoring;
+}
+
+function requestNewAccessToken() {
+  return restoreSession().then((data) => data.accessToken);
+}
 
 function flushQueue(error, token) {
   queue.forEach(({ resolve, reject }) => (error ? reject(error) : resolve(token)));
@@ -75,14 +106,7 @@ api.interceptors.response.use(
         });
     }
 
-    refreshing = (async () => {
-      const stored = tokenStore.refresh;
-      if (!stored) throw new Error('sin refresh token');
-      const { data } = await axios.post('/api/auth/refresh', { refreshToken: stored });
-      tokenStore.set(data.data);
-      return data.data.accessToken;
-    })();
-
+    refreshing = requestNewAccessToken();
     try {
       const token = await refreshing;
       flushQueue(null, token);

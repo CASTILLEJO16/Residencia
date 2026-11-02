@@ -1,5 +1,6 @@
 'use strict';
 const { z } = require('zod');
+const { partialWithoutDefaults } = require('./helpers');
 
 const WIDGET_TYPES = ['line', 'bar', 'pie', 'gauge', 'number', 'table', 'area'];
 
@@ -19,7 +20,7 @@ const createKpiSchema = z.object({
   isActive: z.boolean().optional().default(true),
 });
 
-const updateKpiSchema = createKpiSchema.partial().refine(
+const updateKpiSchema = partialWithoutDefaults(createKpiSchema).refine(
   (d) => Object.keys(d).length > 0, { message: 'Debe enviar al menos un campo' });
 
 const previewSchema = z.object({

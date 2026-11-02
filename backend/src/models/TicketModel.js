@@ -1,5 +1,5 @@
 'use strict';
-const { query, getLastInsertId } = require('../config/database');
+const { query } = require('../config/database');
 const { parsePagination, buildMeta, safeSort } = require('../utils/pagination');
 
 const FIELDS = `

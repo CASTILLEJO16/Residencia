@@ -64,7 +64,7 @@ async function list(queryParams) {
      FROM audit_logs a ${where}
      ORDER BY a.created_at DESC
      LIMIT ? OFFSET ?`,
-    [params[0], params[0], params[1], params[1], params[2], params[2], params[3], params[3], params[4], params[4], params[5], params[6]]
+    [params[0], params[0], params[1], params[1], params[2], params[2], params[3], params[3], params[4], params[4], params[6], params[5]]
   );
 
   const count = await query(
