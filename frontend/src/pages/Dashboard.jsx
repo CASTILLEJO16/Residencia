@@ -1,10 +1,11 @@
 import { useCallback, useState } from 'react';
 import { RefreshCw, AlertTriangle, Clock, CheckCircle, TrendingUp, Users } from 'lucide-react';
-import { ticketApi, alertApi } from '../services/endpoints';
+import { ticketApi, alertApi, kpiApi } from '../services/endpoints';
 import { useAsync, useInterval } from '../hooks/useAsync';
 import PageHeader from '../components/common/PageHeader';
 import Button from '../components/common/Button';
-import { Loading, ErrorState } from '../components/common/States';
+import KPIWidget from '../components/dashboard/KPIWidget';
+import { Loading, ErrorState, EmptyState } from '../components/common/States';
 import { relative } from '../utils/format';
 
 export default function Dashboard() {
@@ -12,16 +13,20 @@ export default function Dashboard() {
 
   const summary = useAsync(() => ticketApi.summary(), []);
   const alerts = useAsync(() => alertApi.summary(), []);
+  const board = useAsync(() => kpiApi.dashboard(), []);
 
-  const reloadAll = useCallback(async () => {
+  const reloadAll = useCallback(async (force = false) => {
     await Promise.all([
       summary.reload(),
       alerts.reload(),
+      // El backend sirve del cache segun refresh_interval de cada KPI.
+      kpiApi.dashboard(force).then((data) => board.setData(data)).catch(() => {}),
     ]);
     setLastUpdate(new Date());
-  }, [summary.reload, alerts.reload]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summary.reload, alerts.reload, board.setData]);
 
-  useInterval(() => { reloadAll().catch(() => {}); }, 60000);
+  useInterval(() => { reloadAll(false).catch(() => {}); }, 60000);
 
   if (summary.loading && !summary.data) return <Loading label="Cargando el tablero" />;
   if (summary.error) return <div className="p-5"><ErrorState error={summary.error} onRetry={summary.reload} /></div>;
@@ -80,7 +85,7 @@ export default function Dashboard() {
         title="Tablero de Tickets"
         description={`Actualizado ${relative(lastUpdate)}`}
       >
-        <Button icon={RefreshCw} onClick={() => reloadAll()}>Actualizar</Button>
+        <Button icon={RefreshCw} onClick={() => reloadAll(true)}>Actualizar</Button>
       </PageHeader>
 
       <AlertStatus alerts={alertData} />
@@ -93,8 +98,66 @@ export default function Dashboard() {
         </div>
 
         <QuickActions summary={data} />
+
+        <KpiBoard board={board} />
       </div>
     </>
+  );
+}
+
+/** Indicadores definidos en Inteligencia, con su grafica. */
+function KpiBoard({ board }) {
+  const [refreshingId, setRefreshingId] = useState(null);
+
+  const refreshOne = async (kpiId) => {
+    setRefreshingId(kpiId);
+    try {
+      const fresh = await kpiApi.data(kpiId, true);
+      board.setData((current) => ({
+        ...current,
+        widgets: current.widgets.map((w) => (w.kpiId === kpiId ? { ...fresh, kpiId, ok: true } : w)),
+      }));
+    } catch {
+      board.setData((current) => ({
+        ...current,
+        widgets: current.widgets.map((w) => (w.kpiId === kpiId
+          ? { ...w, ok: false, error: 'No se pudo actualizar' } : w)),
+      }));
+    } finally {
+      setRefreshingId(null);
+    }
+  };
+
+  if (board.loading && !board.data) return <div className="mt-6"><Loading label="Cargando indicadores" /></div>;
+  if (board.error) return <div className="mt-6"><ErrorState error={board.error} onRetry={board.reload} /></div>;
+
+  const widgets = board.data?.widgets || [];
+  const metaById = new Map((board.data?.kpis || []).map((k) => [k.id, k]));
+
+  return (
+    <section className="mt-6">
+      <h2 className="mb-3 text-sm font-semibold">Indicadores</h2>
+      {widgets.length === 0 ? (
+        <div className="panel">
+          <EmptyState
+            title="Todavía no hay indicadores"
+            message="Se crean desde Inteligencia: se define una consulta, se elige cómo mostrarla y aparece aquí."
+          />
+        </div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {widgets.map((widget) => (
+            <KPIWidget
+              key={widget.kpiId}
+              widget={widget}
+              meta={metaById.get(widget.kpiId)}
+              refreshing={refreshingId === widget.kpiId}
+              onRefresh={() => refreshOne(widget.kpiId)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

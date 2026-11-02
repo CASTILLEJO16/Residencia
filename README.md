@@ -43,6 +43,16 @@ npm run db:init
 npm run db:seed
 ```
 
+Para trabajar con un escenario operativo completo (equipo de soporte, ~4 meses de
+tickets, 12 KPIs con umbrales, histórico y alertas), en lugar de `db:seed` use:
+
+```bash
+npm run db:seed:real
+```
+
+Con `-- --reset` reemplaza los tickets, KPIs, alertas y bitácora existentes
+(conserva los usuarios). Ver la sección *Escenario operativo* más abajo.
+
 En producción no se cargan datos demo; en su lugar se crea el primer administrador:
 
 ```bash
@@ -86,6 +96,31 @@ Para producción: `npm run build` genera `dist/`, que se sirve como archivos est
 | analista1, analista2 | SIO_Analistas (Analista) |
 | consulta1 | SIO_Consulta (Solo lectura) |
 | auditor1 | SIO_Auditoria (Auditor) |
+
+### 4. Escenario operativo (`npm run db:seed:real`)
+
+Simula la mesa de ayuda de TI de una empresa en Ciudad de México:
+
+- **Equipo:** 5 analistas, un líder de soporte (`rmorales`, recibe los
+  escalamientos), una gerente con rol de consulta (`lgomez`) y un auditor
+  (`hnavarro`), además del administrador. Todos con la contraseña de
+  `SEED_PASSWORD` y cambio obligatorio al entrar.
+- **Tickets:** ~15 por día hábil durante 120 días (más los lunes, pocos en fin de
+  semana), en horario laboral, sobre 22 tipos de incidente reales (VPN, ERP,
+  punto de venta, phishing, respaldos, timbrado...) y 11 áreas. Cada ticket
+  tiene SLA según prioridad (crítica 4 h, alta 8 h, media 24 h, baja 72 h),
+  asignación, comentarios, escalamientos, esperas y cierre con resolución, todo
+  registrado en su historial y en la auditoría.
+- **KPIs:** 12 indicadores calculados con consultas reales sobre los tickets
+  (backlog, críticos, vencidos, sin asignar, cumplimiento de SLA, tiempo de
+  resolución, flujo diario, distribución por estado y prioridad, volumen
+  semanal, alertas activas y tabla de tickets que requieren atención), con
+  umbrales y un histórico de 30 días.
+- **Alertas:** las que esos umbrales habrían disparado en el periodo; el monitor
+  sigue generando las nuevas al arrancar el servidor.
+
+Los datos se generan con una semilla fija: el mismo comando produce el mismo
+escenario, con fechas relativas al momento en que se ejecuta.
 
 ## Configuración de LDAP / Active Directory
 
