@@ -14,7 +14,11 @@ export default function Login() {
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const destination = location.state?.from?.pathname || '/dashboard';
+  // Volver a la pagina de origen, salvo que sea el propio login o el cambio de
+  // contrasena: tras cambiarla se cierra la sesion y la ruta protegida deja
+  // anotado /cambiar-contrasena como origen, lo que provocaba un ciclo.
+  const from = location.state?.from?.pathname;
+  const destination = from && !['/login', '/cambiar-contrasena'].includes(from) ? from : '/dashboard';
 
   useEffect(() => {
     if (user) navigate(user.mustChangePassword ? '/cambiar-contrasena' : destination, { replace: true });
