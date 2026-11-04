@@ -275,6 +275,9 @@ function relevantGroups(groups) {
 
 /** Prueba de conectividad para el arranque y el diagnostico. */
 async function ping() {
+  if (!config.ldap.url) {
+    return { ok: true, message: 'LDAP no configurado (modo autenticacion local)' };
+  }
   const client = createClient();
   try {
     if (canLookup()) await client.bind(config.ldap.bindUser, config.ldap.bindPassword);
