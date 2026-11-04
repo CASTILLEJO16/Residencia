@@ -160,6 +160,11 @@ const login = asyncHandler(async (req, res) => {
       );
 
       if (!roleId) {
+        console.warn(
+          `[AUTH AD] ${directoryUser.username} no tiene un grupo del SIO. ` +
+          `Grupos que devolvio AD: ${(directoryUser.groups || []).join(', ') || '(ninguno)'}. ` +
+          `Se esperaba alguno de: ${Object.values(config.ldap.groups).join(', ')}`
+        );
         await AuditLogModel.write({
           action: 'auth.login_failed',
           entityType: 'user',

@@ -126,6 +126,17 @@ function first(value) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+function toArray(value) {
+  if (value === undefined || value === null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+/** "CN=SIO_Admin,OU=Grupos,DC=lab,DC=local" -> "SIO_Admin" */
+function cnFromDn(dn) {
+  const match = /^CN=((?:\\.|[^,])+)/i.exec(String(dn));
+  return match ? match[1].replace(/\\(.)/g, '$1') : null;
+}
+
 function guidToString(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length !== 16) return null;
   // objectGUID viene en el orden mixto de Microsoft; se deja en el formato
@@ -148,7 +159,7 @@ async function readProfile(client, sam) {
     filter: escapeFilter`(&(objectCategory=person)(objectClass=user)(sAMAccountName=${sam}))`,
     attributes: [
       'sAMAccountName', 'displayName', 'givenName', 'sn', 'mail',
-      'userPrincipalName', 'userAccountControl', 'distinguishedName', 'objectGUID',
+      'userPrincipalName', 'userAccountControl', 'distinguishedName', 'objectGUID', 'memberOf',
     ],
     explicitBufferAttributes: ['objectGUID'],
     sizeLimit: 2,
@@ -158,12 +169,28 @@ async function readProfile(client, sam) {
   const entry = searchEntries[0];
   const dn = entry.dn;
 
-  const groups = await client.search(config.ldap.baseDN, {
-    scope: 'sub',
-    filter: `(&(objectClass=group)(member:${IN_CHAIN}:=${escapeFilter`${dn}`}))`,
-    attributes: ['cn', 'sAMAccountName'],
-    sizeLimit: 500,
-  });
+  // Grupos anidados (LDAP_MATCHING_RULE_IN_CHAIN). Si la busqueda falla o no
+  // devuelve nada (permisos, otra particion), se usan los grupos directos de
+  // memberOf. De cada grupo se guardan tanto el cn como el sAMAccountName,
+  // porque pueden ser distintos ("SIO Admin" vs "SIO_Admin").
+  const names = new Set();
+  try {
+    const nested = await client.search(config.ldap.baseDN, {
+      scope: 'sub',
+      filter: `(&(objectClass=group)(member:${IN_CHAIN}:=${escapeFilter`${dn}`}))`,
+      attributes: ['cn', 'sAMAccountName'],
+      sizeLimit: 500,
+    });
+    for (const g of nested.searchEntries) {
+      [first(g.sAMAccountName), first(g.cn)].filter(Boolean).forEach((n) => names.add(String(n)));
+    }
+  } catch (err) {
+    console.warn('[ldap] no se pudieron leer los grupos anidados:', err.message);
+  }
+  for (const groupDn of toArray(entry.memberOf)) {
+    const cn = cnFromDn(groupDn);
+    if (cn) names.add(cn);
+  }
 
   const username = first(entry.sAMAccountName) || sam;
   const upn = first(entry.userPrincipalName) || `${username}@${config.ldap.domain}`;
@@ -180,7 +207,7 @@ async function readProfile(client, sam) {
     dn,
     externalId: guidToString(first(entry.objectGUID)),
     disabled: (uac & UAC_DISABLED) !== 0,
-    groups: groups.searchEntries.map((g) => first(g.sAMAccountName) || first(g.cn)).filter(Boolean),
+    groups: [...names],
   };
 }
 
@@ -258,19 +285,24 @@ async function lookup(username) {
  * Traduce la lista de grupos de AD al rol del SIO de mayor privilegio.
  * Devuelve null si la persona no esta en ningun grupo del SIO.
  */
+/** Compara nombres sin distinguir mayusculas ni espacio/guion/guion bajo. */
+function normalizeGroupName(name) {
+  return String(name).trim().toLowerCase().replace(/[\s_-]+/g, '_');
+}
+
 function resolveRole(groups) {
-  const owned = new Set((groups || []).map((g) => String(g).toLowerCase()));
+  const owned = new Set((groups || []).map(normalizeGroupName));
   for (const role of ROLE_PRIORITY) {
     const adGroup = config.ldap.groups[role];
-    if (adGroup && owned.has(adGroup.toLowerCase())) return role;
+    if (adGroup && owned.has(normalizeGroupName(adGroup))) return role;
   }
   return null;
 }
 
 /** Solo los grupos del SIO, para la auditoria (no se registra toda la membresia). */
 function relevantGroups(groups) {
-  const wanted = new Set(Object.values(config.ldap.groups).map((g) => g.toLowerCase()));
-  return (groups || []).filter((g) => wanted.has(String(g).toLowerCase()));
+  const wanted = new Set(Object.values(config.ldap.groups).map(normalizeGroupName));
+  return (groups || []).filter((g) => wanted.has(normalizeGroupName(g)));
 }
 
 /** Prueba de conectividad para el arranque y el diagnostico. */
@@ -299,5 +331,5 @@ module.exports = {
   relevantGroups,
   normalizeUsername,
   ping,
-  _internal: { guidToString, translateBindError },
+  _internal: { guidToString, translateBindError, cnFromDn, normalizeGroupName },
 };
