@@ -140,6 +140,16 @@ Los grupos de AD se traducen a los roles del SIO (`SIO_Admin`, `SIO_Analistas`,
 con `AD_GROUP_ADMIN`, `AD_GROUP_ANALISTAS`, `AD_GROUP_AUDITORIA` y
 `AD_GROUP_CONSULTA`. Si el usuario está en varios, gana el de mayor privilegio.
 
+Los nombres se comparan sin distinguir mayúsculas, espacios, guiones ni guiones
+bajos, contra el nombre visible (`cn`) y el anterior a Windows 2000
+(`sAMAccountName`) de cada grupo, incluidos los grupos anidados. Si un usuario
+recibe *"El usuario no tiene un grupo autorizado en SIO"*, este diagnóstico
+muestra qué grupos devuelve AD para él y qué rol le corresponde:
+
+```bash
+npm run ldap:test -- usuario
+```
+
 **Fallback a login local.** Si el controlador de dominio no responde, el login
 local solo se permite cuando `LDAP_FALLBACK_LOCAL=true`. Por defecto está activo en
 desarrollo y **desactivado con `NODE_ENV=production`**, para que un corte de AD no

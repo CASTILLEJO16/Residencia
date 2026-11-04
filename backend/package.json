@@ -12,7 +12,8 @@
     "db:seed": "node scripts/seed-sqlite.js",
     "db:seed:real": "node scripts/seed-realistic.js",
     "seed:admin": "node scripts/createAdmin.js",
-    "test": "node --test --test-concurrency=1"
+    "test": "node --test --test-concurrency=1",
+    "ldap:test": "node scripts/ldap-diagnostico.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

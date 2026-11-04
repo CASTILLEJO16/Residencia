@@ -72,3 +72,17 @@ test('credenciales rechazadas por AD responden 401', async () => {
   const res = await login('local_admin');
   assert.equal(res.status, 401);
 });
+
+test('los nombres de grupo se comparan sin distinguir mayusculas, espacios ni guiones', () => {
+  assert.equal(ldapService.resolveRole(['Domain Users', 'SIO Admin']), 'SIO_Admin');
+  assert.equal(ldapService.resolveRole(['sio-analistas']), 'SIO_Analistas');
+  assert.equal(ldapService.resolveRole(['SIO_Consulta ']), 'SIO_Consulta');
+  assert.equal(ldapService.resolveRole(['SIO_Administradores']), null);
+});
+
+test('el cn se extrae del DN de memberOf', () => {
+  const { cnFromDn } = ldapService._internal;
+  assert.equal(cnFromDn('CN=SIO_Admin,OU=Grupos,DC=lab,DC=local'), 'SIO_Admin');
+  assert.equal(cnFromDn('CN=Soporte\\, Nivel 2,OU=Grupos,DC=lab,DC=local'), 'Soporte, Nivel 2');
+  assert.equal(cnFromDn('OU=Grupos,DC=lab,DC=local'), null);
+});
