@@ -7,6 +7,10 @@
  * Pide la contrasena del usuario (no se muestra al escribirla), se autentica
  * igual que el login y muestra su DN, todos los grupos que devuelve AD y el
  * rol del SIO que le corresponderia. No escribe nada en la base de datos.
+ *
+ * Si la consola pierde caracteres al escribir (pasa en Windows con teclas
+ * AltGr como @ o #), la contrasena se puede pasar en una variable:
+ *   PowerShell:  $env:LDAP_TEST_PASSWORD='...'; npm run ldap:test -- usuario
  */
 require('dotenv').config();
 const readline = require('readline');
@@ -43,7 +47,14 @@ async function main() {
   }
   if (!config.ldap.url) return;
 
-  const password = await askHidden(`\nContrasena de ${username}: `);
+  let password = process.env.LDAP_TEST_PASSWORD;
+  if (password) {
+    console.log('\nContrasena tomada de LDAP_TEST_PASSWORD.');
+  } else {
+    password = await askHidden(`\nContrasena de ${username}: `);
+  }
+  // Ayuda a detectar si la consola perdio caracteres (sin mostrar la contrasena).
+  console.log(`Caracteres leidos: ${password.length}`);
 
   console.log('\n=== Autenticacion ===');
   let profile;
@@ -52,6 +63,12 @@ async function main() {
   } catch (err) {
     console.log(`FALLO (${err.code || err.name}): ${err.message}`);
     if (err.reason) console.log(`Motivo tecnico: ${err.reason}`);
+    if (err.code === 'AD_BAD_PASSWORD' && !process.env.LDAP_TEST_PASSWORD) {
+      console.log('\nSi la cantidad de caracteres leidos no coincide con su contrasena, la consola');
+      console.log('perdio alguno (suele pasar con AltGr: @ # \\ en teclado espanol). Pruebe asi:');
+      console.log(`  $env:LDAP_TEST_PASSWORD='su_contrasena'; npm run ldap:test -- ${username}`);
+      console.log('  Remove-Item Env:LDAP_TEST_PASSWORD');
+    }
     process.exitCode = 1;
     return;
   }
